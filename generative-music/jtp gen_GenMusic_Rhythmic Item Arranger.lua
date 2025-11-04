@@ -14,7 +14,7 @@
 --   2. Set a time selection where you want the pattern generated
 --   3. Run the script - it generates random patterns instantly!
 --   4. Run again and again until you get something you like
---   5. (Optional) Hold Shift or set SHOW_GUI=true in config to manually choose parameters
+--   5. (Optional) set SHOW_GUI=true in config to manually choose parameters
 --
 --   ## Pattern Types
 --   - Euclidean: Evenly distributed rhythms (e.g., 5 hits in 8 steps)

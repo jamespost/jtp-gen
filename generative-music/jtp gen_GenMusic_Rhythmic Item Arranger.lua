@@ -27,6 +27,7 @@
 --   - Original items are not modified
 --   - Each run generates different results for stochastic patterns
 --   - Works with audio items on the timeline
+--   - Set ACCENT_MODE=true in config to enable dynamic accents (some hits louder)
 
 if not reaper then
     return
@@ -41,7 +42,9 @@ local CONFIG = {
     DEFAULT_LENGTH_VAR = 0.1, -- 10% length variation
     SHOW_GUI = false, -- Set to true to show parameter dialog (or hold Shift when running)
     SHOW_HELP = false, -- Set to true to show help on first run
-    DEBUG_MODE = false -- Set to true to show debug console output
+    DEBUG_MODE = false, -- Set to true to show debug console output
+    ACCENT_MODE = true, -- Set to true to enable accent pattern (some items louder)
+    ACCENT_REDUCTION_DB = -6 -- dB reduction for non-accented items
 }
 
 -- Euclidean rhythm algorithm (Bjorklund's algorithm)
@@ -189,6 +192,73 @@ local function generateRandomDensePattern(steps, density)
     return pattern
 end
 
+-- Generate accent pattern (which hits should be accented)
+local function generateAccentPattern(rhythm_pattern)
+    local accent_pattern = {}
+    local hits = {}
+
+    -- Collect positions where there are hits
+    for i, hit in ipairs(rhythm_pattern) do
+        if hit == 1 then
+            table.insert(hits, i)
+        end
+    end
+
+    -- If no hits, return empty pattern
+    if #hits == 0 then
+        for i = 1, #rhythm_pattern do
+            accent_pattern[i] = 0
+        end
+        return accent_pattern
+    end
+
+    -- Initialize all as non-accented
+    for i = 1, #rhythm_pattern do
+        accent_pattern[i] = 0
+    end
+
+    -- Common accent patterns based on number of hits
+    if #hits == 1 then
+        -- Single hit is always accented
+        accent_pattern[hits[1]] = 1
+
+    elseif #hits == 2 then
+        -- Accent first hit
+        accent_pattern[hits[1]] = 1
+
+    elseif #hits == 3 then
+        -- Accent first hit
+        accent_pattern[hits[1]] = 1
+
+    elseif #hits == 4 then
+        -- Accent 1st and 3rd (classic 4-on-the-floor with backbeat feel)
+        accent_pattern[hits[1]] = 1
+        accent_pattern[hits[3]] = 1
+
+    else
+        -- For longer patterns, use musical accent logic:
+        -- Accent downbeats (every 4th in standard time)
+        -- Always accent the first hit
+        accent_pattern[hits[1]] = 1
+
+        -- Accent every 4th hit for typical bar structure
+        for i = 1, #hits do
+            if (i - 1) % 4 == 0 then
+                accent_pattern[hits[i]] = 1
+            end
+        end
+
+        -- Add some randomness: 20% chance for other hits to be accented
+        for i = 1, #hits do
+            if accent_pattern[hits[i]] == 0 and math.random() < 0.2 then
+                accent_pattern[hits[i]] = 1
+            end
+        end
+    end
+
+    return accent_pattern
+end
+
 -- Get user input for pattern generation
 local function getUserInput()
     local retval, user_input = reaper.GetUserInputs(
@@ -303,7 +373,7 @@ Each run generates different results!]]
 end
 
 -- Create item copy at specific position with variations
-local function createItemCopy(source_item, track, position, base_length, vel_var, len_var)
+local function createItemCopy(source_item, track, position, base_length, vel_var, len_var, is_accent)
     -- Calculate variations
     local velocity_mult = 1.0 + (math.random() * 2 - 1) * vel_var
     local length_mult = 1.0 + (math.random() * 2 - 1) * len_var
@@ -350,6 +420,15 @@ local function createItemCopy(source_item, track, position, base_length, vel_var
         reaper.GetMediaItemInfo_Value(source_item, "D_FADEINLEN"))
     reaper.SetMediaItemInfo_Value(new_item, "D_FADEOUTLEN",
         reaper.GetMediaItemInfo_Value(source_item, "D_FADEOUTLEN"))
+
+    -- Apply accent reduction if accent mode is enabled and this is not an accent
+    if CONFIG.ACCENT_MODE and not is_accent then
+        -- Convert dB to linear volume multiplier and apply to item volume
+        local db_reduction = CONFIG.ACCENT_REDUCTION_DB
+        local vol_mult = 10 ^ (db_reduction / 20)  -- dB to linear
+        local current_vol = reaper.GetMediaItemInfo_Value(new_item, "D_VOL")
+        reaper.SetMediaItemInfo_Value(new_item, "D_VOL", current_vol * vol_mult)
+    end
 
     return new_item
 end
@@ -501,7 +580,22 @@ function main()
     if CONFIG.DEBUG_MODE then
         reaper.ShowConsoleMsg(string.format("jtp gen: Steps=%d, Beats=%.2f, Beats/step=%.3f\n",
                               params.steps, total_beats, beats_per_step))
-    end    -- Create items based on pattern
+    end
+
+    -- Generate accent pattern if accent mode is enabled
+    local accent_pattern = nil
+    if CONFIG.ACCENT_MODE then
+        accent_pattern = generateAccentPattern(pattern)
+        if CONFIG.DEBUG_MODE then
+            local accent_count = 0
+            for _, accent in ipairs(accent_pattern) do
+                if accent == 1 then accent_count = accent_count + 1 end
+            end
+            reaper.ShowConsoleMsg(string.format("jtp gen: Accent mode enabled - %d accents\n", accent_count))
+        end
+    end
+
+    -- Create items based on pattern
     local created_count = 0
     local pattern_hits = 0
     for i, hit in ipairs(pattern) do
@@ -528,8 +622,14 @@ function main()
             local random_source = source_items[math.random(#source_items)]
             local target_track = reaper.GetMediaItem_Track(random_source)
 
+            -- Determine if this hit should be accented
+            local is_accent = false
+            if CONFIG.ACCENT_MODE and accent_pattern then
+                is_accent = (accent_pattern[i] == 1)
+            end
+
             local new_item = createItemCopy(random_source, target_track, step_position,
-                          base_item_length, params.velocity_var, params.length_var)
+                          base_item_length, params.velocity_var, params.length_var, is_accent)
 
             if new_item then
                 created_count = created_count + 1

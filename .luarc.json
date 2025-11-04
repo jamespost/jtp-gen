@@ -1,0 +1,13 @@
+{
+  "runtime.version": "Lua 5.3",
+  "diagnostics.globals": [
+    "reaper",
+    "gfx",
+    "ImGui"
+  ],
+  "workspace.library": [],
+  "completion.callSnippet": "Both",
+  "format.enable": true,
+  "hint.enable": true,
+  "telemetry.enable": false
+}

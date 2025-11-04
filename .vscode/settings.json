@@ -1,0 +1,17 @@
+{
+  "files.associations": {
+    "*.lua": "lua"
+  },
+  "Lua.diagnostics.globals": [
+    "reaper",
+    "gfx",
+    "ImGui"
+  ],
+  "Lua.runtime.version": "Lua 5.3",
+  "Lua.workspace.checkThirdParty": false,
+  "editor.formatOnSave": false,
+  "editor.tabSize": 4,
+  "editor.insertSpaces": true,
+  "files.eol": "\n",
+  "files.trimTrailingWhitespace": true
+}

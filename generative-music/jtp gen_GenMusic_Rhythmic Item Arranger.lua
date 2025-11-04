@@ -40,7 +40,8 @@ local CONFIG = {
     DEFAULT_VELOCITY_VAR = 0.2, -- 20% velocity variation
     DEFAULT_LENGTH_VAR = 0.1, -- 10% length variation
     SHOW_GUI = false, -- Set to true to show parameter dialog (or hold Shift when running)
-    SHOW_HELP = false -- Set to true to show help on first run
+    SHOW_HELP = false, -- Set to true to show help on first run
+    DEBUG_MODE = false -- Set to true to show debug console output
 }
 
 -- Euclidean rhythm algorithm (Bjorklund's algorithm)
@@ -295,7 +296,9 @@ LENGTH VAR: Duration variation (0-1, 0=none, 1=max)
 
 Each run generates different results!]]
 
-    reaper.ShowConsoleMsg(help_text .. "\n")
+    if CONFIG.DEBUG_MODE then
+        reaper.ShowConsoleMsg(help_text .. "\n")
+    end
     reaper.MB(help_text, "jtp gen: Pattern Help", 0)
 end
 
@@ -376,8 +379,10 @@ function main()
     end
 
     -- Debug: Show time selection
-    reaper.ShowConsoleMsg(string.format("jtp gen: Time selection: %.3f to %.3f (%.3f seconds)\n",
-                          time_start, time_end, time_end - time_start))
+    if CONFIG.DEBUG_MODE then
+        reaper.ShowConsoleMsg(string.format("jtp gen: Time selection: %.3f to %.3f (%.3f seconds)\n",
+                              time_start, time_end, time_end - time_start))
+    end
 
     -- Check if Shift key is held to show GUI (requires js_ReaScriptAPI extension)
     local shift_held = false
@@ -432,32 +437,42 @@ function main()
         local hits = math.min(math.max(1, params.param1), params.steps)
         local rotation = math.floor(params.param2)
         pattern = generateEuclideanPattern(hits, params.steps, rotation)
-        reaper.ShowConsoleMsg(string.format("jtp gen: Euclidean [%d,%d] rotation:%d\n",
-                              hits, params.steps, rotation))
+        if CONFIG.DEBUG_MODE then
+            reaper.ShowConsoleMsg(string.format("jtp gen: Euclidean [%d,%d] rotation:%d\n",
+                                  hits, params.steps, rotation))
+        end
 
     elseif params.pattern_type == 2 then
         -- Probability
         local prob = math.max(0, math.min(1, params.param1))
         pattern = generateProbabilityPattern(params.steps, prob)
-        reaper.ShowConsoleMsg(string.format("jtp gen: Probability %.2f\n", prob))
+        if CONFIG.DEBUG_MODE then
+            reaper.ShowConsoleMsg(string.format("jtp gen: Probability %.2f\n", prob))
+        end
 
     elseif params.pattern_type == 3 then
         -- Swing Grid
         swing_amount = math.max(0, math.min(1, params.param1))
         pattern = generateSwingPattern(params.steps, swing_amount)
-        reaper.ShowConsoleMsg(string.format("jtp gen: Swing Grid %.2f\n", swing_amount))
+        if CONFIG.DEBUG_MODE then
+            reaper.ShowConsoleMsg(string.format("jtp gen: Swing Grid %.2f\n", swing_amount))
+        end
 
     elseif params.pattern_type == 4 then
         -- Fractal
         local depth = math.max(1, math.min(5, math.floor(params.param1)))
         pattern = generateFractalPattern(params.steps, depth)
-        reaper.ShowConsoleMsg(string.format("jtp gen: Fractal depth:%d\n", depth))
+        if CONFIG.DEBUG_MODE then
+            reaper.ShowConsoleMsg(string.format("jtp gen: Fractal depth:%d\n", depth))
+        end
 
     elseif params.pattern_type == 5 then
         -- Random Dense
         local density = math.max(0, math.min(1, params.param1))
         pattern = generateRandomDensePattern(params.steps, density)
-        reaper.ShowConsoleMsg(string.format("jtp gen: Random Dense %.2f\n", density))
+        if CONFIG.DEBUG_MODE then
+            reaper.ShowConsoleMsg(string.format("jtp gen: Random Dense %.2f\n", density))
+        end
 
     else
         reaper.MB("Invalid pattern type. Please choose 1-5.", "jtp gen: Error", 0)
@@ -470,8 +485,10 @@ function main()
     local end_beat = reaper.TimeMap_timeToQN(time_end)
     local total_beats = end_beat - start_beat
 
-    reaper.ShowConsoleMsg(string.format("jtp gen: DEBUG - start_beat=%.3f, end_beat=%.3f, total=%.3f\n",
-                          start_beat, end_beat, total_beats))
+    if CONFIG.DEBUG_MODE then
+        reaper.ShowConsoleMsg(string.format("jtp gen: DEBUG - start_beat=%.3f, end_beat=%.3f, total=%.3f\n",
+                              start_beat, end_beat, total_beats))
+    end
 
     -- Calculate beat length per step
     local beats_per_step = total_beats / params.steps
@@ -481,10 +498,10 @@ function main()
     local source_length = reaper.GetMediaItemInfo_Value(selected_source, "D_LENGTH")
 
     -- Debug: Show pattern info
-    --reaper.ShowConsoleMsg(string.format("jtp gen: Steps=%d, Beats=%.2f, Beats/step=%.3f\n",
-                          --params.steps, total_beats, beats_per_step))
-
-    -- Create items based on pattern
+    if CONFIG.DEBUG_MODE then
+        reaper.ShowConsoleMsg(string.format("jtp gen: Steps=%d, Beats=%.2f, Beats/step=%.3f\n",
+                              params.steps, total_beats, beats_per_step))
+    end    -- Create items based on pattern
     local created_count = 0
     local pattern_hits = 0
     for i, hit in ipairs(pattern) do
@@ -516,23 +533,25 @@ function main()
 
             if new_item then
                 created_count = created_count + 1
-            else
+            elseif CONFIG.DEBUG_MODE then
                 reaper.ShowConsoleMsg(string.format("jtp gen: WARNING - Failed to create item at step %d\n", i))
             end
         end
     end
 
-    reaper.ShowConsoleMsg(string.format("jtp gen: Pattern hits=%d, Items created=%d\n",
-                          pattern_hits, created_count))
-
-    -- Update and finish
+    if CONFIG.DEBUG_MODE then
+        reaper.ShowConsoleMsg(string.format("jtp gen: Pattern hits=%d, Items created=%d\n",
+                              pattern_hits, created_count))
+    end    -- Update and finish
     reaper.UpdateArrange()
     reaper.Undo_EndBlock("jtp gen: Rhythmic Item Arranger", -1)
 
-    if created_count > 0 then
-        reaper.ShowConsoleMsg(string.format("jtp gen: Successfully created %d items\n", created_count))
-    else
-        reaper.ShowConsoleMsg("jtp gen: WARNING - No items were created!\n")
+    if CONFIG.DEBUG_MODE then
+        if created_count > 0 then
+            reaper.ShowConsoleMsg(string.format("jtp gen: Successfully created %d items\n", created_count))
+        else
+            reaper.ShowConsoleMsg("jtp gen: WARNING - No items were created!\n")
+        end
     end
 end
 

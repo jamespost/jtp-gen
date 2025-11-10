@@ -1,10 +1,24 @@
 -- @description jtp gen: Melody Generator (Simple Dialog)
 -- @author James
--- @version 1.0
+-- @version 1.3
 -- @about
 --   # jtp gen: Melody Generator (Simple Dialog)
 --   Generates a MIDI melody with a simple built-in REAPER dialog (no ImGui required).
 --   Lets you set a few key parameters quickly and create a melody on the selected track.
+--
+--   Auto-detection mode (enabled by default) - automatically detects root note and
+--   scale from the name of the region containing the selected item or edit cursor.
+--   When a region is detected, note/octave/scale dialogs are skipped!
+--
+--   Supported region name formats:
+--   - "C Major", "Dm", "G# minor", "Ab Dorian" (defaults to octave 4)
+--   - "C4 major", "D#2 minor", "Gb5 Lydian" (explicit octave 0-9)
+--   - Supports sharps (#), flats (b), and various scale names
+--
+--   Dialog options:
+--   - Auto-detect from region (ON) - Skip dialogs when region detected
+--   - Override auto-detected values - Use detected values as defaults but allow changes
+--   - Manual selection (OFF) - Always show all dialogs
 
 -- Check if reaper API is available
 if not reaper then return end
@@ -44,7 +58,8 @@ local defaults = {
     max_keep = tonumber(get_ext('max_keep', 24)),
     root_note = tonumber(get_ext('root_note', 60)), -- Middle C
     scale_name = get_ext('scale_name', 'random'), -- type a name from list below or 'random'
-    num_voices = tonumber(get_ext('num_voices', 1)) -- Number of melodic voices (1-16)
+    num_voices = tonumber(get_ext('num_voices', 1)), -- Number of melodic voices (1-16)
+    auto_detect = get_ext('auto_detect', '1') == '1' -- Auto-detect from region name (default enabled)
 }
 
 -- Small curated scale list (intervals from root)
@@ -79,6 +94,139 @@ end
 local function table_contains(t, x)
     for i = 1, #t do if t[i] == x then return true end end
     return false
+end
+
+-- =============================
+-- Region name parsing
+-- =============================
+
+-- Parse region name to extract root note and scale
+-- Supports formats like: "C Major", "Dm", "G# minor", "Ab Dorian", "C4 major", etc.
+local function parse_region_name(region_name)
+    if not region_name or region_name == "" then return nil, nil, nil end
+
+    -- Normalize the string
+    local name = region_name:lower():gsub("^%s*(.-)%s*$", "%1") -- trim whitespace
+
+    -- Define note patterns with their pitch classes
+    local note_patterns = {
+        {"c#", 1}, {"c♯", 1}, {"db", 1}, {"d♭", 1}, {"c sharp", 1}, {"d flat", 1},
+        {"c", 0},
+        {"d#", 3}, {"d♯", 3}, {"eb", 3}, {"e♭", 3}, {"d sharp", 3}, {"e flat", 3},
+        {"d", 2},
+        {"e", 4},
+        {"f#", 6}, {"f♯", 6}, {"gb", 6}, {"g♭", 6}, {"f sharp", 6}, {"g flat", 6},
+        {"f", 5},
+        {"g#", 8}, {"g♯", 8}, {"ab", 8}, {"a♭", 8}, {"g sharp", 8}, {"a flat", 8},
+        {"g", 7},
+        {"a#", 10}, {"a♯", 10}, {"bb", 10}, {"b♭", 10}, {"a sharp", 10}, {"b flat", 10},
+        {"a", 9},
+        {"b", 11}
+    }
+
+    -- Try to find note at start of name
+    local found_note_class = nil
+    local remaining_text = name
+
+    for _, pattern_data in ipairs(note_patterns) do
+        local pattern = pattern_data[1]
+        local pitch_class = pattern_data[2]
+
+        -- Try to match at start with word boundary
+        if name:match("^" .. pattern .. "[%s_%-]") or name:match("^" .. pattern .. "$") then
+            found_note_class = pitch_class
+            remaining_text = name:gsub("^" .. pattern, ""):gsub("^[%s_%-]+", "")
+            break
+        end
+    end
+
+    if not found_note_class then return nil, nil, nil end
+
+    -- Try to extract octave number (0-9) if present
+    local found_octave = nil
+    local octave_match = remaining_text:match("^(%d)")
+    if octave_match then
+        found_octave = tonumber(octave_match)
+        -- Remove the octave from remaining text
+        remaining_text = remaining_text:gsub("^%d+", ""):gsub("^[%s_%-]+", "")
+    end
+
+    -- Now try to find scale in remaining text
+    local scale_patterns = {
+        {"maj", "major"},
+        {"major", "major"},
+        {"m", "natural_minor"},
+        {"min", "natural_minor"},
+        {"minor", "natural_minor"},
+        {"dor", "dorian"},
+        {"dorian", "dorian"},
+        {"phryg", "phrygian"},
+        {"phrygian", "phrygian"},
+        {"lyd", "lydian"},
+        {"lydian", "lydian"},
+        {"mix", "mixolydian"},
+        {"mixolydian", "mixolydian"},
+        {"loc", "locrian"},
+        {"locrian", "locrian"},
+        {"harm", "harmonic_minor"},
+        {"harmonic", "harmonic_minor"},
+        {"mel", "melodic_minor"},
+        {"melodic", "melodic_minor"},
+        {"pent", "major_pentatonic"},
+        {"pentatonic", "major_pentatonic"},
+        {"whole", "whole_tone"},
+        {"blues", "blues"}
+    }
+
+    local found_scale = nil
+    for _, scale_data in ipairs(scale_patterns) do
+        local pattern = scale_data[1]
+        local scale_name = scale_data[2]
+
+        if remaining_text:match(pattern) then
+            found_scale = scale_name
+            break
+        end
+    end
+
+    -- If no scale found, try to infer from minor indicator
+    if not found_scale then
+        -- Default to major
+        found_scale = "major"
+    end
+
+    return found_note_class, found_scale, found_octave
+end
+
+-- Get region(s) at current position (selected item or edit cursor)
+local function get_region_at_position()
+    local pos = nil
+
+    -- First, try to get position from selected item
+    local item = reaper.GetSelectedMediaItem(0, 0)
+    if item then
+        pos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+    else
+        -- No item selected, use edit cursor
+        pos = reaper.GetCursorPosition()
+    end
+
+    if not pos then return nil end
+
+    -- Find region at this position
+    local _, num_markers, num_regions = reaper.CountProjectMarkers(0)
+
+    for i = 0, num_markers + num_regions - 1 do
+        local _, is_region, region_start, region_end, name, idx = reaper.EnumProjectMarkers(i)
+
+        if is_region and pos >= region_start and pos < region_end then
+            log('Found region: "', name, '" at position ', pos)
+            return name
+        end
+    end
+
+    log('No region found at position ', pos)
+    return nil
 end
 
 -- =============================
@@ -129,50 +277,161 @@ local function show_popup_menu(items, default_idx)
 end
 
 -- =============================
--- Dialog - Step 1: Root Note Selection
+-- Auto-detection from region name
 -- =============================
 
--- Convert stored root_note to note name and octave for display
-local default_note_name = note_names[(defaults.root_note % 12) + 1]
-local default_octave = math.floor(defaults.root_note / 12) - 1
+local auto_detected_note_class = nil
+local auto_detected_scale = nil
+local auto_detected_octave = nil
+local region_name = nil
 
--- Find default note index
-local default_note_idx = 1
-for i, name in ipairs(note_names) do
-    if name == default_note_name then
-        default_note_idx = i
-        break
-    end
-end
-
--- Show note selection menu
-local note_choice = show_popup_menu(note_names, default_note_idx)
-if note_choice == 0 then return end -- User cancelled
-
--- Show octave selection menu
-local octaves = {"0","1","2","3","4","5","6","7","8","9"}
-local default_octave_idx = default_octave + 1 -- Convert to 1-based index
-local octave_choice = show_popup_menu(octaves, default_octave_idx)
-if octave_choice == 0 then return end -- User cancelled
-
--- Show scale selection menu (with random option)
-local scale_menu_items = {"random"}
-for _, name in ipairs(scale_keys) do
-    table.insert(scale_menu_items, name)
-end
-
-local default_scale_idx = 1
-if defaults.scale_name ~= "random" then
-    for i, name in ipairs(scale_menu_items) do
-        if name == defaults.scale_name then
-            default_scale_idx = i
-            break
+if defaults.auto_detect then
+    region_name = get_region_at_position()
+    if region_name then
+        auto_detected_note_class, auto_detected_scale, auto_detected_octave = parse_region_name(region_name)
+        if auto_detected_note_class then
+            log('Auto-detected from region "', region_name, '": note class ', auto_detected_note_class, ', scale ', auto_detected_scale or 'none', ', octave ', auto_detected_octave or 'default')
         end
     end
 end
 
-local scale_choice = show_popup_menu(scale_menu_items, default_scale_idx)
-if scale_choice == 0 then return end -- User cancelled
+-- =============================
+-- Dialog - Step 0: Auto-detect Mode Toggle
+-- =============================
+
+local auto_detect_items = {"Auto-detect from region (ON)", "Manual selection (OFF)"}
+local default_auto_detect_idx = defaults.auto_detect and 1 or 2
+
+-- If auto-detect found something, add option to override
+if auto_detected_note_class and auto_detected_scale then
+    table.insert(auto_detect_items, 2, "Override auto-detected values")
+    -- Adjust default if needed - item 2 is now override, item 3 is manual off
+    if not defaults.auto_detect then
+        default_auto_detect_idx = 3 -- Point to "Manual selection (OFF)"
+    end
+end
+
+local auto_detect_choice = show_popup_menu(auto_detect_items, default_auto_detect_idx)
+if auto_detect_choice == 0 then return end -- User cancelled
+
+-- Determine mode based on choice
+local auto_detect_enabled
+local force_manual = false
+
+if auto_detected_note_class and auto_detected_scale then
+    -- Three-option menu
+    if auto_detect_choice == 1 then
+        auto_detect_enabled = true
+        force_manual = false
+    elseif auto_detect_choice == 2 then
+        auto_detect_enabled = true
+        force_manual = true -- Use auto-detect but allow override
+    else -- choice == 3
+        auto_detect_enabled = false
+        force_manual = true
+    end
+else
+    -- Two-option menu
+    auto_detect_enabled = (auto_detect_choice == 1)
+    force_manual = not auto_detect_enabled
+end
+
+set_ext('auto_detect', auto_detect_enabled and '1' or '0')
+
+-- If user just turned on auto-detect, try to detect now
+if auto_detect_enabled and not auto_detected_note_class then
+    region_name = get_region_at_position()
+    if region_name then
+        auto_detected_note_class, auto_detected_scale, auto_detected_octave = parse_region_name(region_name)
+    end
+end
+
+-- =============================
+-- Dialog - Step 1: Root Note Selection
+-- =============================
+
+local root_note
+local scale_name
+
+-- If auto-detect is enabled and successful, skip the dialogs (unless user chose to override)
+if auto_detect_enabled and auto_detected_note_class ~= nil and auto_detected_scale and not force_manual then
+    -- Use auto-detected values
+    local target_octave = auto_detected_octave or 4
+    root_note = (target_octave + 1) * 12 + auto_detected_note_class
+    -- Clamp to valid MIDI range
+    if root_note < 0 then root_note = 0 end
+    if root_note > 127 then root_note = 127 end
+    scale_name = auto_detected_scale
+
+    -- Show confirmation message
+    local root_name = note_names[(root_note % 12) + 1]
+    local octave = math.floor(root_note / 12) - 1
+    reaper.MB(
+        string.format('Region detected: "%s"\n\nUsing: %s%d %s',
+            region_name, root_name, octave, scale_name),
+        'Auto-detect Active',
+        0
+    )
+else
+    -- Manual selection mode
+    -- If we have auto-detected values but user chose to override, use those as defaults
+    local default_root_note = defaults.root_note
+    if auto_detected_note_class and auto_detected_octave then
+        local target_octave = auto_detected_octave or 4
+        default_root_note = (target_octave + 1) * 12 + auto_detected_note_class
+        if default_root_note < 0 then default_root_note = 0 end
+        if default_root_note > 127 then default_root_note = 127 end
+    end
+
+    local default_note_name = note_names[(default_root_note % 12) + 1]
+    local default_octave = math.floor(default_root_note / 12) - 1
+
+    -- Find default note index
+    local default_note_idx = 1
+    for i, name in ipairs(note_names) do
+        if name == default_note_name then
+            default_note_idx = i
+            break
+        end
+    end
+
+    -- Show note selection menu
+    local note_choice = show_popup_menu(note_names, default_note_idx)
+    if note_choice == 0 then return end -- User cancelled
+
+    -- Show octave selection menu
+    local octaves = {"0","1","2","3","4","5","6","7","8","9"}
+    local default_octave_idx = default_octave + 1 -- Convert to 1-based index
+    local octave_choice = show_popup_menu(octaves, default_octave_idx)
+    if octave_choice == 0 then return end -- User cancelled
+
+    -- Show scale selection menu (with random option)
+    local scale_menu_items = {"random"}
+    for _, name in ipairs(scale_keys) do
+        table.insert(scale_menu_items, name)
+    end
+
+    -- Use auto-detected scale as default if overriding, otherwise use saved preference
+    local default_scale_name = auto_detected_scale or defaults.scale_name
+    local default_scale_idx = 1
+    if default_scale_name ~= "random" then
+        for i, name in ipairs(scale_menu_items) do
+            if name == default_scale_name then
+                default_scale_idx = i
+                break
+            end
+        end
+    end
+
+    local scale_choice = show_popup_menu(scale_menu_items, default_scale_idx)
+    if scale_choice == 0 then return end -- User cancelled
+
+    -- Process selections from menus
+    local input_note_name = note_names[note_choice]
+    local input_octave = tonumber(octaves[octave_choice])
+    scale_name = scale_menu_items[scale_choice]
+    root_note = note_name_to_pitch(input_note_name, input_octave)
+end
 
 -- =============================
 -- Dialog - Step 2: Generation Parameters
@@ -208,13 +467,6 @@ local max_notes = tonumber(fields[3]) or defaults.max_notes
 local min_keep = tonumber(fields[4]) or defaults.min_keep
 local max_keep = tonumber(fields[5]) or defaults.max_keep
 local num_voices = tonumber(fields[6]) or defaults.num_voices
-
--- Process selections from menus
-local input_note_name = note_names[note_choice]
-local input_octave = tonumber(octaves[octave_choice])
-local scale_name = scale_menu_items[scale_choice]
-
-local root_note = note_name_to_pitch(input_note_name, input_octave)
 
 -- Sanity checks
 measures = clamp(math.floor(measures + 0.5), 1, 128)

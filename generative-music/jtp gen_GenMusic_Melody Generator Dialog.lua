@@ -1,6 +1,6 @@
 -- @description jtp gen: Melody Generator (Simple Dialog)
 -- @author James
--- @version 1.3
+-- @version 1.4
 -- @about
 --   # jtp gen: Melody Generator (Simple Dialog)
 --   Generates a MIDI melody with a simple built-in REAPER dialog (no ImGui required).
@@ -9,6 +9,13 @@
 --   Auto-detection mode (enabled by default) - automatically detects root note and
 --   scale from the name of the region containing the selected item or edit cursor.
 --   When a region is detected, note/octave/scale dialogs are skipped!
+--
+--   NEW in v1.4: Advanced Polyphony with Music Theory
+--   - Three polyphony modes: Free (creative), Harmonic (chords), Voice Leading (counterpoint)
+--   - Theory Weight parameter (0-1) blends between free/creative and strict music theory
+--   - Proper voice leading rules: contrary motion, smooth voice movement, consonance
+--   - Avoids parallel perfect intervals, voice crossing, and other theory violations
+--   - Weight 0 = original creative behavior, Weight 1 = strict theory adherence
 --
 --   Supported region name formats:
 --   - "C Major", "Dm", "G# minor", "Ab Dorian" (defaults to octave 4)
@@ -58,9 +65,11 @@ local defaults = {
     max_keep = tonumber(get_ext('max_keep', 24)),
     root_note = tonumber(get_ext('root_note', 60)), -- Middle C
     scale_name = get_ext('scale_name', 'random'), -- type a name from list below or 'random'
-    num_voices = tonumber(get_ext('num_voices', 1)), -- Number of melodic voices (1-16)
+    num_voices = tonumber(get_ext('num_voices', 4)), -- Number of melodic voices (1-16)
     auto_detect = get_ext('auto_detect', '1') == '1', -- Auto-detect from region name (default enabled)
-    ca_mode = get_ext('ca_mode', '0') == '1' -- Cellular Automata mode (default disabled)
+    ca_mode = get_ext('ca_mode', '0') == '1', -- Cellular Automata mode (default disabled)
+    poly_mode = get_ext('poly_mode', 'free'), -- Polyphony mode: 'free', 'harmonic', 'voice_leading'
+    theory_weight = tonumber(get_ext('theory_weight', 0.5)) -- 0.0 = free, 1.0 = strict theory
 }
 
 -- Small curated scale list (intervals from root)
@@ -438,6 +447,26 @@ end
 -- Dialog - Step 2: Generation Parameters
 -- =============================
 
+-- Show polyphony mode selection menu (only if multiple voices)
+local poly_mode = 'free'
+local theory_weight = defaults.theory_weight
+
+if defaults.num_voices > 1 then
+    local poly_modes = {"Free (Creative)", "Harmonic (Chords)", "Voice Leading (Counterpoint)"}
+    local default_poly_idx = 1
+    if defaults.poly_mode == 'harmonic' then default_poly_idx = 2
+    elseif defaults.poly_mode == 'voice_leading' then default_poly_idx = 3
+    end
+
+    local poly_choice = show_popup_menu(poly_modes, default_poly_idx)
+    if poly_choice == 0 then return end
+
+    if poly_choice == 1 then poly_mode = 'free'
+    elseif poly_choice == 2 then poly_mode = 'harmonic'
+    elseif poly_choice == 3 then poly_mode = 'voice_leading'
+    end
+end
+
 local captions = table.concat({
     'Measures',
     'Min Notes',
@@ -447,7 +476,8 @@ local captions = table.concat({
     'Number of Voices (1-16)',
     'CA Mode (0=off 1=on)',
     'CA: Growth Rate (0.1-1.0)',
-    'CA: Time Bias (0-1, 0.5=equal)'
+    'CA: Time Bias (0-1, 0.5=equal)',
+    'Theory Weight (0=free 1=strict)'
 }, ',')
 
 local defaults_csv = table.concat({
@@ -459,10 +489,11 @@ local defaults_csv = table.concat({
     tostring(defaults.num_voices),
     defaults.ca_mode and '1' or '0',
     '0.4',  -- Default growth rate
-    '0.6'   -- Default time bias (prefers horizontal)
+    '0.6',  -- Default time bias (prefers horizontal)
+    tostring(theory_weight)
 }, ',')
 
-local ok, ret = reaper.GetUserInputs('jtp gen: Melody Generator - Parameters', 9, captions, defaults_csv)
+local ok, ret = reaper.GetUserInputs('jtp gen: Melody Generator - Parameters', 10, captions, defaults_csv)
 if not ok then return end
 
 local fields = {}
@@ -477,6 +508,7 @@ local num_voices = tonumber(fields[6]) or defaults.num_voices
 local ca_mode = (tonumber(fields[7]) or 0) == 1
 local ca_growth_rate = tonumber(fields[8]) or 0.4
 local ca_time_bias = tonumber(fields[9]) or 0.6
+theory_weight = tonumber(fields[10]) or theory_weight
 
 -- Sanity checks
 measures = clamp(math.floor(measures + 0.5), 1, 128)
@@ -488,6 +520,7 @@ root_note = clamp(math.floor(root_note + 0.5), 0, 127)
 num_voices = clamp(math.floor(num_voices + 0.5), 1, 16)
 ca_growth_rate = clamp(ca_growth_rate, 0.1, 1.0)
 ca_time_bias = clamp(ca_time_bias, 0.0, 1.0)
+theory_weight = clamp(theory_weight, 0.0, 1.0)
 
 -- Resolve scale
 local chosen_scale_key
@@ -508,6 +541,223 @@ set_ext('root_note', root_note)
 set_ext('scale_name', chosen_scale_key)
 set_ext('num_voices', num_voices)
 set_ext('ca_mode', ca_mode and '1' or '0')
+set_ext('poly_mode', poly_mode)
+set_ext('theory_weight', theory_weight)
+
+-- =============================
+-- Music Theory & Voice Leading Engine
+-- =============================
+
+-- Interval qualities for consonance/dissonance assessment
+local INTERVAL_QUALITIES = {
+    [0] = {type = 'perfect', consonance = 1.0, name = 'unison'},
+    [1] = {type = 'dissonant', consonance = 0.2, name = 'minor 2nd'},
+    [2] = {type = 'dissonant', consonance = 0.4, name = 'major 2nd'},
+    [3] = {type = 'imperfect', consonance = 0.7, name = 'minor 3rd'},
+    [4] = {type = 'imperfect', consonance = 0.8, name = 'major 3rd'},
+    [5] = {type = 'perfect', consonance = 0.9, name = 'perfect 4th'},
+    [6] = {type = 'dissonant', consonance = 0.1, name = 'tritone'},
+    [7] = {type = 'perfect', consonance = 1.0, name = 'perfect 5th'},
+    [8] = {type = 'imperfect', consonance = 0.7, name = 'minor 6th'},
+    [9] = {type = 'imperfect', consonance = 0.8, name = 'major 6th'},
+    [10] = {type = 'dissonant', consonance = 0.4, name = 'minor 7th'},
+    [11] = {type = 'dissonant', consonance = 0.5, name = 'major 7th'},
+    [12] = {type = 'perfect', consonance = 1.0, name = 'octave'}
+}
+
+-- Calculate interval between two pitches (0-12 semitones)
+local function get_interval(pitch1, pitch2)
+    local diff = math.abs(pitch1 - pitch2) % 12
+    return diff
+end
+
+-- Get consonance rating for an interval (0.0 = very dissonant, 1.0 = perfect consonance)
+local function get_consonance(pitch1, pitch2)
+    local interval = get_interval(pitch1, pitch2)
+    return INTERVAL_QUALITIES[interval].consonance
+end
+
+-- Check if motion between two voice pairs is parallel (forbidden in strict voice leading)
+local function is_parallel_motion(voice1_from, voice1_to, voice2_from, voice2_to)
+    local interval1 = get_interval(voice1_from, voice2_from)
+    local interval2 = get_interval(voice1_to, voice2_to)
+    local dir1 = voice1_to - voice1_from
+    local dir2 = voice2_to - voice2_from
+
+    -- Parallel if same interval type and same direction
+    if interval1 == interval2 and dir1 * dir2 > 0 then
+        -- Parallel perfect intervals (unison, 5th, octave) are forbidden
+        if interval1 == 0 or interval1 == 7 or interval1 == 12 then
+            return true, 'parallel_perfect'
+        end
+        return true, 'parallel_imperfect'
+    end
+    return false, nil
+end
+
+-- Check if motion is contrary (opposite directions - good!)
+local function is_contrary_motion(voice1_from, voice1_to, voice2_from, voice2_to)
+    local dir1 = voice1_to - voice1_from
+    local dir2 = voice2_to - voice2_from
+    return (dir1 * dir2 < 0) and (dir1 ~= 0 and dir2 ~= 0)
+end
+
+-- Check if motion is oblique (one voice stays, other moves - acceptable)
+local function is_oblique_motion(voice1_from, voice1_to, voice2_from, voice2_to)
+    local dir1 = voice1_to - voice1_from
+    local dir2 = voice2_to - voice2_from
+    return (dir1 == 0 and dir2 ~= 0) or (dir1 ~= 0 and dir2 == 0)
+end
+
+-- Build chord from scale degrees (triads and 7th chords)
+local function build_chord(scale_notes, root_scale_idx, chord_type, octave_range)
+    octave_range = octave_range or {-1, 1}
+
+    local chord = {}
+    local intervals
+
+    if chord_type == 'triad' then
+        -- Root, 3rd, 5th
+        intervals = {0, 2, 4}
+    elseif chord_type == 'seventh' then
+        -- Root, 3rd, 5th, 7th
+        intervals = {0, 2, 4, 6}
+    elseif chord_type == 'sus4' then
+        -- Root, 4th, 5th
+        intervals = {0, 3, 4}
+    else
+        intervals = {0, 2, 4}  -- default triad
+    end
+
+    for _, interval in ipairs(intervals) do
+        local scale_idx = ((root_scale_idx - 1 + interval) % #scale_notes) + 1
+        local base_pitch = scale_notes[scale_idx]
+
+        -- Add octave variations
+        for oct = octave_range[1], octave_range[2] do
+            table.insert(chord, base_pitch + (oct * 12))
+        end
+    end
+
+    return chord
+end
+
+-- Voice leading: find smoothest voice movement (minimize total motion)
+local function find_best_voice_leading(prev_pitches, target_chord, theory_weight)
+    if #prev_pitches == 0 then
+        -- First chord, just pick from target
+        local result = {}
+        for i = 1, math.min(#target_chord, 4) do
+            table.insert(result, target_chord[i])
+        end
+        return result
+    end
+
+    -- Calculate all possible voice assignments
+    local num_voices = #prev_pitches
+    local best_assignment = nil
+    local best_score = -math.huge
+
+    -- Generate permutations (simplified for up to 4 voices)
+    local function score_assignment(assignment)
+        local total_motion = 0
+        local contrary_bonus = 0
+        local consonance_score = 0
+        local parallel_penalty = 0
+
+        -- Calculate total voice motion
+        for i = 1, num_voices do
+            total_motion = total_motion + math.abs(assignment[i] - prev_pitches[i])
+        end
+
+        -- Check voice leading quality
+        for i = 1, num_voices - 1 do
+            for j = i + 1, num_voices do
+                -- Reward contrary motion
+                if is_contrary_motion(prev_pitches[i], assignment[i], prev_pitches[j], assignment[j]) then
+                    contrary_bonus = contrary_bonus + 5
+                end
+
+                -- Penalize parallel motion
+                local is_parallel, parallel_type = is_parallel_motion(
+                    prev_pitches[i], assignment[i],
+                    prev_pitches[j], assignment[j]
+                )
+                if is_parallel then
+                    if parallel_type == 'parallel_perfect' then
+                        parallel_penalty = parallel_penalty + 20
+                    else
+                        parallel_penalty = parallel_penalty + 5
+                    end
+                end
+
+                -- Reward consonant intervals
+                consonance_score = consonance_score + get_consonance(assignment[i], assignment[j]) * 3
+            end
+        end
+
+        -- Blend between smooth motion (low total_motion) and theory rules
+        -- theory_weight = 0: prefer minimal motion (creative/free)
+        -- theory_weight = 1: prefer theory rules (contrary motion, consonance, avoid parallels)
+        local smooth_score = -total_motion
+        local theory_score = contrary_bonus + consonance_score - parallel_penalty
+
+        return (1 - theory_weight) * smooth_score + theory_weight * theory_score
+    end
+
+    -- Try different combinations from target_chord
+    -- For simplicity, we'll try sorted ascending, descending, and closest matches
+    local candidates = {}
+
+    -- Candidate 1: Closest pitches
+    local closest = {}
+    local used = {}
+    for i = 1, num_voices do
+        local best_pitch = nil
+        local best_dist = math.huge
+        for _, pitch in ipairs(target_chord) do
+            if not used[pitch] then
+                local dist = math.abs(pitch - prev_pitches[i])
+                if dist < best_dist then
+                    best_dist = dist
+                    best_pitch = pitch
+                end
+            end
+        end
+        if best_pitch then
+            closest[i] = best_pitch
+            used[best_pitch] = true
+        else
+            closest[i] = prev_pitches[i]  -- fallback
+        end
+    end
+    table.insert(candidates, closest)
+
+    -- Candidate 2: Ascending order
+    local sorted_asc = {}
+    for _, p in ipairs(target_chord) do table.insert(sorted_asc, p) end
+    table.sort(sorted_asc)
+    if #sorted_asc >= num_voices then
+        table.insert(candidates, {table.unpack(sorted_asc, 1, num_voices)})
+    end
+
+    -- Candidate 3: Middle range
+    local mid_start = math.max(1, math.floor(#sorted_asc / 2) - math.floor(num_voices / 2))
+    if mid_start + num_voices - 1 <= #sorted_asc then
+        table.insert(candidates, {table.unpack(sorted_asc, mid_start, mid_start + num_voices - 1)})
+    end
+
+    -- Score all candidates
+    for _, candidate in ipairs(candidates) do
+        local score = score_assignment(candidate)
+        if score > best_score then
+            best_score = score
+            best_assignment = candidate
+        end
+    end
+
+    return best_assignment or closest
+end
 
 -- =============================
 -- 2D Cellular Automata Engine - "Growing Mold"
@@ -847,10 +1097,10 @@ if ca_mode then
     end
 
 -- =============================
--- STANDARD MODE (Traditional)
+-- STANDARD MODE with Polyphony Modes
 -- =============================
 else
-    log('Using standard mode - walking melody algorithm')
+    log('Using standard mode with polyphony: ', poly_mode, ', theory weight: ', theory_weight)
 
     -- Simple motion logic constants
     local MAX_REPEATED = 0
@@ -858,78 +1108,249 @@ else
     local BIG_JUMP_CHANCE = 0.1
     local BIG_JUMP_INTERVAL = 4
 
-    -- Generate a single voice of melody
-    local function generate_voice(channel)
-        -- Note count and pruning for this voice
-        local NUM_NOTES = math.random(min_notes, max_notes)
-        local notes_to_keep = math.random(min_keep, max_keep)
+    -- =============================
+    -- Mode 1: FREE - Independent voice generation (original behavior)
+    -- =============================
+    if poly_mode == 'free' or num_voices == 1 then
+        log('Free polyphony mode - independent voices')
 
-        -- STANDARD MODE: Walking motion logic
-        local repeated = 0
-        local direction = (math.random(2) == 1) and 1 or -1
+        -- Generate a single voice of melody
+        local function generate_voice(channel)
+            -- Note count and pruning for this voice
+            local NUM_NOTES = math.random(min_notes, max_notes)
+            local notes_to_keep = math.random(min_keep, max_keep)
 
-        local function next_note(prev_note, prev_dur)
-            local move = 0
-            if repeated >= MAX_REPEATED or math.random() < NOTE_VARIETY then
-                move = direction
-                if math.random() > 0.7 then move = -move end
-                repeated = 0
-            else
-                if math.random() < BIG_JUMP_CHANCE then
-                    move = (math.random(2) == 1 and -1 or 1) * math.random(1, BIG_JUMP_INTERVAL)
+            -- Walking motion logic
+            local repeated = 0
+            local direction = (math.random(2) == 1) and 1 or -1
+
+            local function next_note(prev_note, prev_dur)
+                local move = 0
+                if repeated >= MAX_REPEATED or math.random() < NOTE_VARIETY then
+                    move = direction
+                    if math.random() > 0.7 then move = -move end
                     repeated = 0
+                else
+                    if math.random() < BIG_JUMP_CHANCE then
+                        move = (math.random(2) == 1 and -1 or 1) * math.random(1, BIG_JUMP_INTERVAL)
+                        repeated = 0
+                    end
+                end
+                local idx = find_index(scale_notes, prev_note)
+                local new_idx = clamp(idx + move, 1, #scale_notes)
+                return scale_notes[new_idx]
+            end
+
+            -- Insert first note
+            local prev_note = scale_notes[math.random(1, #scale_notes)]
+            local prev_dur = pick_duration(quarter_note)
+            local note_start = start_time
+            reaper.MIDI_InsertNote(take, false, false, timeToPPQ(note_start), timeToPPQ(note_start + prev_dur), channel, prev_note, vel_for_dur(prev_dur), false)
+
+            local note_end = note_start + prev_dur
+            for i = 2, NUM_NOTES do
+                prev_note = next_note(prev_note, prev_dur)
+                prev_dur = pick_duration(prev_dur)
+                note_start = note_end
+                note_end = note_start + prev_dur
+                reaper.MIDI_InsertNote(take, false, false, timeToPPQ(note_start), timeToPPQ(note_end), channel, prev_note, vel_for_dur(prev_dur), false)
+            end
+
+            -- Prune excess notes for this voice
+            local voice_note_count = 0
+            local _, total_cnt = reaper.MIDI_CountEvts(take)
+            for i = 0, total_cnt - 1 do
+                local _, _, _, _, _, chan = reaper.MIDI_GetNote(take, i)
+                if chan == channel then voice_note_count = voice_note_count + 1 end
+            end
+
+            if voice_note_count > notes_to_keep then
+                local deleted = 0
+                for i = total_cnt - 1, 0, -1 do
+                    if deleted >= (voice_note_count - notes_to_keep) then break end
+                    local _, _, _, _, _, chan = reaper.MIDI_GetNote(take, i)
+                    if chan == channel then
+                        reaper.MIDI_DeleteNote(take, i)
+                        deleted = deleted + 1
+                    end
                 end
             end
-            local idx = find_index(scale_notes, prev_note)
-            local new_idx = clamp(idx + move, 1, #scale_notes)
-            local vel = vel_for_dur(prev_dur)
-            return scale_notes[new_idx], vel
         end
 
-        -- Insert first note
-        local prev_note = scale_notes[math.random(1, #scale_notes)]
-        local prev_dur = pick_duration(quarter_note)
-        local note_start = start_time
-        reaper.MIDI_InsertNote(take, false, false, timeToPPQ(note_start), timeToPPQ(note_start + prev_dur), channel, prev_note, math.random(60,100), false)
+        -- Generate all voices independently
+        for voice = 0, num_voices - 1 do
+            generate_voice(voice)
+        end
 
+    -- =============================
+    -- Mode 2: HARMONIC - Chord-based generation
+    -- =============================
+    elseif poly_mode == 'harmonic' then
+        log('Harmonic polyphony mode - chord progression')
+
+        local NUM_CHORDS = math.random(min_notes, max_notes)
+        local chord_types = {'triad', 'seventh', 'sus4'}
+
+        local prev_chord_pitches = {}
+        local note_start = start_time
+
+        for i = 1, NUM_CHORDS do
+            -- Pick a random root from scale
+            local root_idx = math.random(1, #scale_notes)
+            local chord_type = choose_random(chord_types)
+
+            -- Build chord pool
+            local chord_pool = build_chord(scale_notes, root_idx, chord_type, {-1, 1})
+
+            -- Use voice leading to choose pitches
+            local chord_pitches = find_best_voice_leading(prev_chord_pitches, chord_pool, theory_weight)
+
+            -- Pick duration for this chord
+            local chord_dur = pick_duration(quarter_note)
+            local note_end = note_start + chord_dur
+
+            -- Insert all voices for this chord
+            for voice = 0, math.min(num_voices - 1, #chord_pitches - 1) do
+                local pitch = chord_pitches[voice + 1]
+                local vel = vel_for_dur(chord_dur)
+                reaper.MIDI_InsertNote(take, false, false, timeToPPQ(note_start), timeToPPQ(note_end), voice, pitch, vel, false)
+            end
+
+            prev_chord_pitches = chord_pitches
+            note_start = note_end
+        end
+
+    -- =============================
+    -- Mode 3: VOICE LEADING - Counterpoint with proper voice leading
+    -- =============================
+    elseif poly_mode == 'voice_leading' then
+        log('Voice leading polyphony mode - counterpoint with theory weight: ', theory_weight)
+
+        local NUM_NOTES = math.random(min_notes, max_notes)
+
+        -- Track state for all voices
+        local voice_states = {}
+        for v = 0, num_voices - 1 do
+            voice_states[v] = {
+                pitch = scale_notes[math.random(1, #scale_notes)],
+                direction = (math.random(2) == 1) and 1 or -1,
+                repeated = 0
+            }
+        end
+
+        -- Function to generate next note for a voice with voice leading awareness
+        local function next_note_vl(voice_id, prev_note, all_current_pitches)
+            local state = voice_states[voice_id]
+            local move = 0
+
+            -- Decide movement based on blend of free and theory-guided
+            if math.random() < (1 - theory_weight) then
+                -- Free/creative movement
+                if state.repeated >= MAX_REPEATED or math.random() < NOTE_VARIETY then
+                    move = state.direction
+                    if math.random() > 0.7 then move = -move end
+                    state.repeated = 0
+                else
+                    if math.random() < BIG_JUMP_CHANCE then
+                        move = (math.random(2) == 1 and -1 or 1) * math.random(1, BIG_JUMP_INTERVAL)
+                        state.repeated = 0
+                    end
+                end
+            else
+                -- Theory-guided movement
+                -- Prefer stepwise motion (small intervals)
+                if math.random() < 0.7 then
+                    move = (math.random(2) == 1 and 1 or -1)
+                else
+                    move = (math.random(2) == 1 and 1 or -1) * 2
+                end
+
+                -- Check for contrary motion opportunity
+                local other_directions = {}
+                for v = 0, num_voices - 1 do
+                    if v ~= voice_id then
+                        table.insert(other_directions, voice_states[v].direction)
+                    end
+                end
+
+                -- Encourage contrary motion at higher theory weights
+                if #other_directions > 0 and math.random() < (theory_weight * 0.7) then
+                    local avg_dir = 0
+                    for _, d in ipairs(other_directions) do avg_dir = avg_dir + d end
+                    avg_dir = avg_dir / #other_directions
+                    -- Move opposite to average
+                    if avg_dir > 0 then move = -math.abs(move)
+                    else move = math.abs(move) end
+                end
+            end
+
+            local idx = find_index(scale_notes, prev_note)
+            local new_idx = clamp(idx + move, 1, #scale_notes)
+            local new_pitch = scale_notes[new_idx]
+
+            -- Update state
+            state.direction = (new_pitch > prev_note) and 1 or ((new_pitch < prev_note) and -1 or 0)
+            state.pitch = new_pitch
+
+            return new_pitch
+        end
+
+        -- Generate first chord
+        local note_start = start_time
+        local prev_dur = pick_duration(quarter_note)
+        local all_current = {}
+
+        for voice = 0, num_voices - 1 do
+            local pitch = voice_states[voice].pitch
+            all_current[voice] = pitch
+            reaper.MIDI_InsertNote(take, false, false, timeToPPQ(note_start), timeToPPQ(note_start + prev_dur), voice, pitch, vel_for_dur(prev_dur), false)
+        end
+
+        -- Generate subsequent notes with voice leading
         local note_end = note_start + prev_dur
         for i = 2, NUM_NOTES do
-            -- Standard mode: use walking motion
-            local vel
-            prev_note, vel = next_note(prev_note, prev_dur)
+            local new_all_current = {}
+
+            -- Move all voices
+            for voice = 0, num_voices - 1 do
+                local new_pitch = next_note_vl(voice, all_current[voice], all_current)
+                new_all_current[voice] = new_pitch
+            end
+
+            -- Check voice leading quality and possibly adjust
+            if theory_weight > 0.5 then
+                -- Avoid voice crossing for adjacent voices
+                for voice = 0, num_voices - 2 do
+                    if new_all_current[voice] < new_all_current[voice + 1] then
+                        -- Swap if needed
+                        new_all_current[voice], new_all_current[voice + 1] = new_all_current[voice + 1], new_all_current[voice]
+                    end
+                end
+            end
 
             prev_dur = pick_duration(prev_dur)
             note_start = note_end
             note_end = note_start + prev_dur
-            reaper.MIDI_InsertNote(take, false, false, timeToPPQ(note_start), timeToPPQ(note_end), channel, prev_note, vel_for_dur(prev_dur), false)
+
+            -- Insert all voices
+            for voice = 0, num_voices - 1 do
+                reaper.MIDI_InsertNote(take, false, false, timeToPPQ(note_start), timeToPPQ(note_end), voice, new_all_current[voice], vel_for_dur(prev_dur), false)
+            end
+
+            all_current = new_all_current
         end
 
-        -- Optionally prune notes for this voice
-        -- We need to count notes on this channel only
-        local voice_note_count = 0
+        -- Prune if needed
+        local notes_to_keep = math.random(min_keep, max_keep)
         local _, total_cnt = reaper.MIDI_CountEvts(take)
-        for i = 0, total_cnt - 1 do
-            local _, _, _, _, _, chan = reaper.MIDI_GetNote(take, i)
-            if chan == channel then voice_note_count = voice_note_count + 1 end
-        end
-
-        -- Delete excess notes on this channel (from end)
-        if voice_note_count > notes_to_keep then
+        if total_cnt > notes_to_keep then
             local deleted = 0
             for i = total_cnt - 1, 0, -1 do
-                if deleted >= (voice_note_count - notes_to_keep) then break end
-                local _, _, _, _, _, chan = reaper.MIDI_GetNote(take, i)
-                if chan == channel then
-                    reaper.MIDI_DeleteNote(take, i)
-                    deleted = deleted + 1
-                end
+                if deleted >= (total_cnt - notes_to_keep) then break end
+                reaper.MIDI_DeleteNote(take, i)
+                deleted = deleted + 1
             end
         end
-    end
-
-    -- Generate all voices
-    for voice = 0, num_voices - 1 do
-        generate_voice(voice)
     end
 end
 

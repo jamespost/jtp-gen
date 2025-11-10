@@ -84,13 +84,29 @@ end
 -- =============================
 -- Dialog helpers
 -- =============================
-local note_names = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"}
+-- Note names with enharmonic equivalents
+local note_names = {"C","C#/Db","D","D#/Eb","E","F","F#/Gb","G","G#/Ab","A","A#/Bb","B"}
+
+-- Map display names back to MIDI pitch class
+local note_display_to_pitch_class = {
+    ["C"] = 0,
+    ["C#/Db"] = 1,
+    ["D"] = 2,
+    ["D#/Eb"] = 3,
+    ["E"] = 4,
+    ["F"] = 5,
+    ["F#/Gb"] = 6,
+    ["G"] = 7,
+    ["G#/Ab"] = 8,
+    ["A"] = 9,
+    ["A#/Bb"] = 10,
+    ["B"] = 11
+}
 
 local function note_name_to_pitch(name, octave)
-    for i, n in ipairs(note_names) do
-        if n == name then
-            return (octave + 1) * 12 + (i - 1)
-        end
+    local pitch_class = note_display_to_pitch_class[name]
+    if pitch_class then
+        return (octave + 1) * 12 + pitch_class
     end
     return nil
 end

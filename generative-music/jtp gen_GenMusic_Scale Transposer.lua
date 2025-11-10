@@ -42,12 +42,28 @@ table.sort(scale_keys)
 -- =============================
 local note_names = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"}
 
+-- Map of enharmonic equivalents
+local enharmonic_map = {
+    ["C"] = 0, ["B#"] = 0,
+    ["C#"] = 1, ["DB"] = 1,
+    ["D"] = 2,
+    ["D#"] = 3, ["EB"] = 3,
+    ["E"] = 4, ["FB"] = 4,
+    ["F"] = 5, ["E#"] = 5,
+    ["F#"] = 6, ["GB"] = 6,
+    ["G"] = 7,
+    ["G#"] = 8, ["AB"] = 8,
+    ["A"] = 9,
+    ["A#"] = 10, ["BB"] = 10,
+    ["B"] = 11, ["CB"] = 11
+}
+
 local function note_name_to_pitch(name, octave)
-    -- Convert note name like "C" or "C#" to MIDI pitch
-    for i, n in ipairs(note_names) do
-        if n == name then
-            return (octave + 1) * 12 + (i - 1)
-        end
+    -- Convert note name like "C", "C#", "Db" to MIDI pitch
+    -- Accept both sharps and flats
+    local pitch_class = enharmonic_map[name:upper()]
+    if pitch_class then
+        return (octave + 1) * 12 + pitch_class
     end
     return nil
 end
@@ -60,11 +76,11 @@ local function pitch_to_note_name(pitch)
 end
 
 local function parse_item_name(name)
-    -- Parse item name format: "C4 major" or "G#3 minor_pentatonic"
+    -- Parse item name format: "C4 major" or "G#3 minor_pentatonic" or "Db4 blues"
     -- Returns: root_note (MIDI), scale_name, or nil if not parseable
 
-    -- Try to match note name (with optional sharp), octave, and scale
-    local note_pattern = "([A-G][#]?)(%d+)%s+([%w_]+)"
+    -- Try to match note name (with optional sharp or flat), octave, and scale
+    local note_pattern = "([A-G][#bB]?)(%d+)%s+([%w_]+)"
     local note_str, octave_str, scale_str = name:match(note_pattern)
 
     if note_str and octave_str and scale_str then
@@ -192,7 +208,7 @@ local function main()
     -- Show dialog
     local captions = table.concat({
         'Current: ' .. item_name .. ' [' .. detected_text .. ']',
-        'New Root Note (C, C#, D, etc.)',
+        'New Root Note (C, C#/Db, D, etc.)',
         'New Root Octave (0-9)',
         'New Scale (' .. scale_list .. ')'
     }, ',')
@@ -218,7 +234,7 @@ local function main()
     -- Validate inputs
     local new_root_note = note_name_to_pitch(new_note_name, new_octave)
     if not new_root_note then
-        reaper.ShowMessageBox('Invalid note name. Use format like: C, C#, D, etc.', 'Invalid Input', 0)
+        reaper.ShowMessageBox('Invalid note name. Use format like: C, C#, Db, D, etc.', 'Invalid Input', 0)
         return
     end
 

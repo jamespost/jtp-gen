@@ -84,14 +84,24 @@ end
 -- =============================
 -- Dialog
 -- =============================
+
+-- Convert stored root_note to note name and octave for display
+local note_names = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"}
+local default_note_name = note_names[(defaults.root_note % 12) + 1]
+local default_octave = math.floor(defaults.root_note / 12) - 1
+
+-- Build scale list for display
+local scale_list = table.concat(scale_keys, ', ')
+
 local captions = table.concat({
     'Measures',
     'Min Notes',
     'Max Notes',
     'Min Keep',
     'Max Keep',
-    'Root Note (0-127)',
-    'Scale (name or "random")',
+    'Root Note (C, C#, D, etc.)',
+    'Root Octave (0-9)',
+    'Scale (' .. scale_list .. ' or "random")',
     'Number of Voices (1-16)'
 }, ',')
 
@@ -101,12 +111,13 @@ local defaults_csv = table.concat({
     tostring(defaults.max_notes),
     tostring(defaults.min_keep),
     tostring(defaults.max_keep),
-    tostring(defaults.root_note),
+    tostring(default_note_name),
+    tostring(default_octave),
     tostring(defaults.scale_name),
     tostring(defaults.num_voices)
 }, ',')
 
-local ok, ret = reaper.GetUserInputs('jtp gen: Melody Generator', 8, captions, defaults_csv)
+local ok, ret = reaper.GetUserInputs('jtp gen: Melody Generator', 9, captions .. ',extrawidth=200', defaults_csv)
 if not ok then return end
 
 local fields = {}
@@ -117,9 +128,26 @@ local min_notes = tonumber(fields[2]) or defaults.min_notes
 local max_notes = tonumber(fields[3]) or defaults.max_notes
 local min_keep = tonumber(fields[4]) or defaults.min_keep
 local max_keep = tonumber(fields[5]) or defaults.max_keep
-local root_note = tonumber(fields[6]) or defaults.root_note
-local scale_name = (fields[7] and fields[7]:lower()) or defaults.scale_name
-local num_voices = tonumber(fields[8]) or defaults.num_voices
+local input_note_name = (fields[6] or default_note_name):upper()
+local input_octave = tonumber(fields[7]) or default_octave
+local scale_name = (fields[8] and fields[8]:lower()) or defaults.scale_name
+local num_voices = tonumber(fields[9]) or defaults.num_voices
+
+-- Convert note name and octave to MIDI note number
+local function note_name_to_pitch(name, octave)
+    for i, n in ipairs(note_names) do
+        if n == name then
+            return (octave + 1) * 12 + (i - 1)
+        end
+    end
+    return nil
+end
+
+local root_note = note_name_to_pitch(input_note_name, input_octave)
+if not root_note then
+    reaper.ShowMessageBox('Invalid note name. Use format like: C, C#, D, etc.', 'Invalid Input', 0)
+    return
+end
 
 -- Sanity checks
 measures = clamp(math.floor(measures + 0.5), 1, 128)
@@ -332,7 +360,6 @@ for voice = 0, num_voices - 1 do
 end
 
 -- Name the take
-local note_names = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"}
 local root_name = note_names[(root_note % 12) + 1]
 local octave = math.floor(root_note / 12) - 1
 local take_name = string.format('%s%d %s', root_name, octave, chosen_scale_key)

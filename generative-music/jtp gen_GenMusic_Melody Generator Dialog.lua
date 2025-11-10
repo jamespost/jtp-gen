@@ -1,10 +1,17 @@
 -- @description jtp gen: Melody Generator (Simple Dialog)
 -- @author James
--- @version 1.5
+-- @version 1.6
 -- @about
 --   # jtp gen: Melody Generator (Simple Dialog)
 --   Generates a MIDI melody with a simple built-in REAPER dialog (no ImGui required).
 --   Lets you set a few key parameters quickly and create a melody on the selected track.
+--
+--   NEW in v1.6: Rhythmic Guitar Mode!
+--   - Adapted from adaptive drum generator
+--   - Uses drum-style rhythm/articulation patterns with guitar note choices
+--   - Features: bursts, double hits, focused riffs, rhythmic complexity
+--   - Combines physical constraint modeling with melodic note selection
+--   - Disabled by default - toggle in parameters dialog
 --
 --   NEW in v1.5: Auto Mode - One-Click Generation!
 --   - First dialog: Choose "Auto" to instantly generate with last settings, or "Manual" to configure
@@ -74,7 +81,8 @@ local defaults = {
     auto_detect = get_ext('auto_detect', '1') == '1', -- Auto-detect from region name (default enabled)
     ca_mode = get_ext('ca_mode', '0') == '1', -- Cellular Automata mode (default disabled)
     poly_mode = get_ext('poly_mode', 'free'), -- Polyphony mode: 'free', 'harmonic', 'voice_leading'
-    theory_weight = tonumber(get_ext('theory_weight', 0.5)) -- 0.0 = free, 1.0 = strict theory
+    theory_weight = tonumber(get_ext('theory_weight', 0.5)), -- 0.0 = free, 1.0 = strict theory
+    rhythmic_guitar_mode = get_ext('rhythmic_guitar_mode', '0') == '1' -- Rhythmic guitar mode (default disabled)
 }
 
 -- Small curated scale list (intervals from root)
@@ -345,6 +353,7 @@ local defaults_csv
 local ok
 local ret
 local fields
+local rhythmic_guitar_mode
 
 local mode_items = {"Auto (use last settings)", "Manual (configure all settings)"}
 local mode_choice = show_popup_menu(mode_items, 1)
@@ -546,7 +555,8 @@ captions = table.concat({
     'CA Mode (0=off 1=on)',
     'CA: Growth Rate (0.1-1.0)',
     'CA: Time Bias (0-1, 0.5=equal)',
-    'Theory Weight (0=free 1=strict)'
+    'Theory Weight (0=free 1=strict)',
+    'Rhythmic Guitar Mode (0=off 1=on)'
 }, ',')
 
 defaults_csv = table.concat({
@@ -559,10 +569,11 @@ defaults_csv = table.concat({
     defaults.ca_mode and '1' or '0',
     '0.4',  -- Default growth rate
     '0.6',  -- Default time bias (prefers horizontal)
-    tostring(theory_weight)
+    tostring(theory_weight),
+    defaults.rhythmic_guitar_mode and '1' or '0'
 }, ',')
 
-ok, ret = reaper.GetUserInputs('jtp gen: Melody Generator - Parameters', 10, captions, defaults_csv)
+ok, ret = reaper.GetUserInputs('jtp gen: Melody Generator - Parameters', 11, captions, defaults_csv)
 if not ok then return end
 
 fields = {}
@@ -578,6 +589,7 @@ ca_mode = (tonumber(fields[7]) or 0) == 1
 ca_growth_rate = tonumber(fields[8]) or 0.4
 ca_time_bias = tonumber(fields[9]) or 0.6
 theory_weight = tonumber(fields[10]) or theory_weight
+rhythmic_guitar_mode = (tonumber(fields[11]) or 0) == 1
 
 -- Sanity checks
 measures = clamp(math.floor(measures + 0.5), 1, 128)
@@ -611,6 +623,7 @@ set_ext('num_voices', num_voices)
 set_ext('ca_mode', ca_mode and '1' or '0')
 set_ext('poly_mode', poly_mode)
 set_ext('theory_weight', theory_weight)
+set_ext('rhythmic_guitar_mode', rhythmic_guitar_mode and '1' or '0')
 
 -- =============================
 -- GENERATE_MELODY label for auto mode
@@ -633,6 +646,7 @@ if use_auto_mode then
     ca_time_bias = 0.6
     poly_mode = defaults.poly_mode
     theory_weight = defaults.theory_weight
+    rhythmic_guitar_mode = defaults.rhythmic_guitar_mode
 
     -- Resolve scale
     if defaults.scale_name == 'random' or not scales[defaults.scale_name] then
@@ -1161,9 +1175,303 @@ for _ = 1,10 do math.random() end
 reaper.Undo_BeginBlock()
 
 -- =============================
+-- RHYTHMIC GUITAR MODE (Drum-Style Rhythmic Generation)
+-- =============================
+if rhythmic_guitar_mode then
+    log('Using Rhythmic Guitar mode - drum-style rhythm with melodic notes')
+
+    -- Configuration constants adapted from drum script
+    local PPQ = 960
+    local SUBDIVS_MIN = 1
+    local SUBDIVS_MAX = 2
+    local BURST_NOTES = 8
+    local HUMANIZE_MS = 7
+    local VEL_MIN = 7
+    local VEL_MAX = 110
+    local SUSTAIN_MODE = true
+    local SUSTAIN_FACTOR = 0.9
+
+    -- Rhythmic pattern probabilities (adapted from drum script)
+    local BURST_CHANCE = 0.250
+    local DOUBLE_STROKE_CHANCE = 0.250
+    local PARADIDDLE_CHANCE = 0.250
+    local FOCUSED_RIFF_CHANCE = 0.300
+    local ANCHOR_DOWNBEAT_CHANCE = 0.300
+    local RANDOM_BEAT_ACCENT_CHANCE = 0.600
+
+    -- Guitar string simulation (replace drum limbs with string tracking)
+    local string_state = {
+        S1 = {last_note_time = nil, last_pitch = nil},
+        S2 = {last_note_time = nil, last_pitch = nil},
+        S3 = {last_note_time = nil, last_pitch = nil},
+        S4 = {last_note_time = nil, last_pitch = nil},
+        S5 = {last_note_time = nil, last_pitch = nil},
+        S6 = {last_note_time = nil, last_pitch = nil}
+    }
+
+    local MIN_STRING_INTERVAL_SECS = 0.01
+
+    -- Helper: Choose a note from the scale
+    local function choose_note()
+        return scale_notes[math.random(1, #scale_notes)]
+    end
+
+    -- Helper: Pick a string for this note
+    local function pick_string()
+        local strings = {"S1", "S2", "S3", "S4", "S5", "S6"}
+        return strings[math.random(1, #strings)]
+    end
+
+    -- Helper: Check if string can play at this time
+    local function can_string_play(string_id, requested_time)
+        local st = string_state[string_id]
+        if not st.last_note_time then return true end
+        local dt = requested_time - st.last_note_time
+        return dt >= MIN_STRING_INTERVAL_SECS
+    end
+
+    -- Helper: Dynamic velocity with accent influence
+    local function get_dynamic_velocity(note_ppq, accent_ppqs, measure_start_ppq, measure_len_ppq)
+        local on_quarter = ((note_ppq % PPQ) == 0)
+        if on_quarter then return math.random(VEL_MIN, VEL_MAX) end
+
+        local accent_factor = 0
+        if accent_ppqs and measure_start_ppq then
+            local accent_window = PPQ / 4
+            for _, accent_ppq in ipairs(accent_ppqs) do
+                local diff = math.abs(note_ppq - accent_ppq)
+                local candidate = (accent_window - diff) / accent_window
+                if candidate > accent_factor then accent_factor = candidate end
+            end
+        end
+
+        local base_min, base_max = 50, 90
+        local bonus = math.floor(accent_factor * 20)
+        local final_min = math.min(VEL_MAX, base_min + bonus)
+        local final_max = math.min(VEL_MAX, base_max + bonus)
+        return math.random(final_min, final_max)
+    end
+
+    -- Helper: Insert note with humanization
+    local function insert_guitar_note(take, ppq_pos, pitch, override_vel_min, override_vel_max, note_duration_ticks, accent_ppqs, measure_start_ppq, measure_len_ppq)
+        local note_time = reaper.MIDI_GetProjTimeFromPPQPos(take, ppq_pos)
+        local humanize_offset_sec = (math.random() * 2 - 1) * (HUMANIZE_MS / 1000)
+        local final_time = note_time + humanize_offset_sec
+
+        local string_id = pick_string()
+        if not can_string_play(string_id, final_time) then return end
+
+        local note_velocity
+        if override_vel_min and override_vel_max then
+            note_velocity = math.random(override_vel_min, override_vel_max)
+        else
+            note_velocity = get_dynamic_velocity(ppq_pos, accent_ppqs, measure_start_ppq, measure_len_ppq)
+        end
+
+        local ppq_with_offset = reaper.MIDI_GetPPQPosFromProjTime(take, final_time)
+        local note_off_ppq = note_duration_ticks and (ppq_with_offset + note_duration_ticks) or (ppq_with_offset + 1)
+
+        reaper.MIDI_InsertNote(take, false, false, ppq_with_offset, note_off_ppq, 0, pitch, note_velocity, false)
+
+        string_state[string_id].last_note_time = final_time
+        string_state[string_id].last_pitch = pitch
+    end
+
+    -- Pattern: Double stroke
+    local function insert_double_stroke(take, base_ppq, spacing_ticks, accent_ppqs, measure_start_ppq, measure_len_ppq)
+        local pitch = choose_note()
+        local duration = SUSTAIN_MODE and math.floor(spacing_ticks * SUSTAIN_FACTOR) or nil
+        insert_guitar_note(take, base_ppq, pitch, nil, nil, duration, accent_ppqs, measure_start_ppq, measure_len_ppq)
+        insert_guitar_note(take, base_ppq + spacing_ticks, pitch, nil, nil, duration, accent_ppqs, measure_start_ppq, measure_len_ppq)
+    end
+
+    -- Pattern: Paradiddle (8-note pattern)
+    local function insert_paradiddle(take, start_ppq, spacing_ticks, kit_focus, accent_ppqs, measure_start_ppq, measure_len_ppq)
+        local function pick_note()
+            if kit_focus and #kit_focus > 0 then
+                return kit_focus[math.random(1, #kit_focus)]
+            else
+                return choose_note()
+            end
+        end
+
+        local strokes = {}
+        for i = 1, 8 do
+            strokes[i] = pick_note()
+        end
+
+        local duration = SUSTAIN_MODE and math.floor(spacing_ticks * SUSTAIN_FACTOR) or nil
+        for i, pitch in ipairs(strokes) do
+            local stroke_ppq = start_ppq + (i - 1) * spacing_ticks
+            insert_guitar_note(take, stroke_ppq, pitch, nil, nil, duration, accent_ppqs, measure_start_ppq, measure_len_ppq)
+        end
+    end
+
+    -- Pattern: Focused riff (repetitive pattern on subset of notes)
+    local function choose_note_subset(size)
+        local subset = {}
+        local pool = {}
+        for _, note in ipairs(scale_notes) do
+            table.insert(pool, note)
+        end
+
+        for i = 1, math.min(size, #pool) do
+            local idx = math.random(1, #pool)
+            table.insert(subset, pool[idx])
+            table.remove(pool, idx)
+        end
+        return subset
+    end
+
+    local function insert_focused_riff(take, start_ppq, measure_end_ppq, note_focus, accent_ppqs, measure_start_ppq, measure_len_ppq)
+        if not note_focus or #note_focus < 1 then
+            note_focus = choose_note_subset(math.random(2, 4))
+        end
+
+        local pattern_length = math.random(3, 5)
+        local total_space = measure_end_ppq - start_ppq
+        local spacing = math.floor(total_space / (pattern_length * 2))
+        local duration = SUSTAIN_MODE and math.floor(spacing * SUSTAIN_FACTOR) or nil
+
+        local pos = start_ppq
+        while pos < measure_end_ppq do
+            for p = 1, pattern_length do
+                local pitch = note_focus[math.random(1, #note_focus)]
+                local insert_pos = pos + (p - 1) * spacing
+                if insert_pos >= measure_end_ppq then break end
+                insert_guitar_note(take, insert_pos, pitch, nil, nil, duration, accent_ppqs, measure_start_ppq, measure_len_ppq)
+            end
+            pos = pos + (pattern_length * spacing)
+        end
+    end
+
+    -- Pattern: Insert accent (strong beat with emphasis)
+    local function insert_accent(take, beat_ppq, accent_ppqs, measure_start_ppq, measure_len_ppq)
+        local duration = SUSTAIN_MODE and math.floor(PPQ * SUSTAIN_FACTOR) or nil
+        local pitch = choose_note()
+        insert_guitar_note(take, beat_ppq, pitch, 80, 110, duration, accent_ppqs, measure_start_ppq, measure_len_ppq)
+        if accent_ppqs then table.insert(accent_ppqs, beat_ppq) end
+    end
+
+    -- Main generation loop
+    local start_ppq = timeToPPQ(start_time)
+    local end_ppq = timeToPPQ(end_time)
+    local total_ppq = end_ppq - start_ppq
+
+    local time_sig_num, _ = reaper.TimeMap_GetTimeSigAtTime(0, start_time)
+    local measure_len_ppq = time_sig_num * PPQ
+
+    local num_measures = math.floor(total_ppq / measure_len_ppq)
+    local leftover_ppq = total_ppq % measure_len_ppq
+    local measure_start_ppq = start_ppq
+
+    for m = 1, num_measures do
+        local current_measure_accents = {}
+        local measure_end = measure_start_ppq + measure_len_ppq
+
+        -- Anchor downbeat
+        if math.random() < ANCHOR_DOWNBEAT_CHANCE then
+            local duration = SUSTAIN_MODE and math.floor(PPQ * SUSTAIN_FACTOR) or nil
+            insert_guitar_note(take, measure_start_ppq, choose_note(), nil, nil, duration, current_measure_accents, measure_start_ppq, measure_len_ppq)
+        end
+
+        -- Random beat accent
+        if math.random() < RANDOM_BEAT_ACCENT_CHANCE then
+            local random_beat_idx = math.random(1, time_sig_num)
+            local random_beat_ppq = measure_start_ppq + (random_beat_idx - 1) * PPQ
+            insert_accent(take, random_beat_ppq, current_measure_accents, measure_start_ppq, measure_len_ppq)
+        end
+
+        -- Focused riff mode for entire measure
+        if math.random() < FOCUSED_RIFF_CHANCE then
+            local note_focus = choose_note_subset(math.random(2, 4))
+            insert_focused_riff(take, measure_start_ppq + PPQ, measure_end, note_focus, current_measure_accents, measure_start_ppq, measure_len_ppq)
+        else
+            -- Beat-by-beat generation
+            for beat_idx = 1, time_sig_num do
+                local beat_ppq = measure_start_ppq + (beat_idx - 1) * PPQ
+
+                local subdivs = math.random(SUBDIVS_MIN, SUBDIVS_MAX)
+                local ticks_per_sub = math.floor(PPQ / subdivs)
+
+                for s = 1, subdivs do
+                    local sub_tick = beat_ppq + (s - 1) * ticks_per_sub
+                    if sub_tick >= measure_end then break end
+
+                    if math.random() < BURST_CHANCE then
+                        -- Burst pattern
+                        for i = 0, BURST_NOTES - 1 do
+                            local flurry_tick = sub_tick + i * math.floor(ticks_per_sub / (BURST_NOTES + 1))
+                            if flurry_tick >= measure_end then break end
+                            local duration = SUSTAIN_MODE and math.floor((ticks_per_sub / (BURST_NOTES + 1)) * SUSTAIN_FACTOR) or nil
+                            insert_guitar_note(take, flurry_tick, choose_note(), nil, nil, duration, current_measure_accents, measure_start_ppq, measure_len_ppq)
+                        end
+                    else
+                        local do_double = (math.random() < DOUBLE_STROKE_CHANCE)
+                        local do_para = (not do_double and math.random() < PARADIDDLE_CHANCE)
+
+                        if do_double then
+                            local stroke_spacing = math.floor(ticks_per_sub * 0.25)
+                            insert_double_stroke(take, sub_tick, stroke_spacing, current_measure_accents, measure_start_ppq, measure_len_ppq)
+                        elseif do_para then
+                            local stroke_spacing = math.floor(ticks_per_sub * 0.25)
+                            insert_paradiddle(take, sub_tick, stroke_spacing, nil, current_measure_accents, measure_start_ppq, measure_len_ppq)
+                        else
+                            local duration = SUSTAIN_MODE and math.floor(ticks_per_sub * SUSTAIN_FACTOR) or nil
+                            insert_guitar_note(take, sub_tick, choose_note(), nil, nil, duration, current_measure_accents, measure_start_ppq, measure_len_ppq)
+                        end
+                    end
+                end
+            end
+        end
+
+        measure_start_ppq = measure_end
+    end
+
+    -- Handle leftover beats
+    if leftover_ppq > 0 then
+        local leftover_start = measure_start_ppq
+        local leftover_end = leftover_start + leftover_ppq
+        local current_measure_accents = {}
+
+        if math.random() < ANCHOR_DOWNBEAT_CHANCE then
+            local duration = SUSTAIN_MODE and math.floor(PPQ * SUSTAIN_FACTOR) or nil
+            insert_guitar_note(take, leftover_start, choose_note(), nil, nil, duration, current_measure_accents, leftover_start, leftover_ppq)
+        end
+
+        local leftover_beats = leftover_ppq / PPQ
+        local cur_tick = 0
+        while cur_tick < leftover_ppq do
+            local subdivs = math.random(SUBDIVS_MIN, SUBDIVS_MAX)
+            local ticks_per_sub = math.floor(PPQ / subdivs)
+
+            for s = 1, subdivs do
+                local sub_tick = cur_tick + (s - 1) * ticks_per_sub
+                if sub_tick >= leftover_ppq then break end
+                local actual_tick = leftover_start + sub_tick
+
+                if math.random() < BURST_CHANCE then
+                    for i = 0, BURST_NOTES - 1 do
+                        local flurry_tick = actual_tick + i * math.floor(ticks_per_sub / (BURST_NOTES + 1))
+                        if flurry_tick >= leftover_end then break end
+                        local duration = SUSTAIN_MODE and math.floor((ticks_per_sub / (BURST_NOTES + 1)) * SUSTAIN_FACTOR) or nil
+                        insert_guitar_note(take, flurry_tick, choose_note(), nil, nil, duration, current_measure_accents, leftover_start, leftover_ppq)
+                    end
+                else
+                    local duration = SUSTAIN_MODE and math.floor(ticks_per_sub * SUSTAIN_FACTOR) or nil
+                    insert_guitar_note(take, actual_tick, choose_note(), nil, nil, duration, current_measure_accents, leftover_start, leftover_ppq)
+                end
+            end
+            cur_tick = cur_tick + PPQ
+        end
+    end
+
+    reaper.MIDI_Sort(take)
+
+-- =============================
 -- CELLULAR AUTOMATA MODE
 -- =============================
-if ca_mode then
+elseif ca_mode then
     log('Using 2D CA mode - growing mold algorithm')
 
     -- Calculate time grid resolution

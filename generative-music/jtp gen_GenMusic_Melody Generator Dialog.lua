@@ -1,16 +1,21 @@
 -- @description jtp gen: Melody Generator (Simple Dialog)
 -- @author James
--- @version 1.4
+-- @version 1.5
 -- @about
 --   # jtp gen: Melody Generator (Simple Dialog)
 --   Generates a MIDI melody with a simple built-in REAPER dialog (no ImGui required).
 --   Lets you set a few key parameters quickly and create a melody on the selected track.
 --
+--   NEW in v1.5: Auto Mode - One-Click Generation!
+--   - First dialog: Choose "Auto" to instantly generate with last settings, or "Manual" to configure
+--   - Auto mode = zero-click generation with your preferred settings
+--   - Perfect for rapid iteration and workflow speed
+--
 --   Auto-detection mode (enabled by default) - automatically detects root note and
 --   scale from the name of the region containing the selected item or edit cursor.
 --   When a region is detected, note/octave/scale dialogs are skipped!
 --
---   NEW in v1.4: Advanced Polyphony with Music Theory
+--   Advanced Polyphony with Music Theory (v1.4)
 --   - Three polyphony modes: Free (creative), Harmonic (chords), Voice Leading (counterpoint)
 --   - Theory Weight parameter (0-1) blends between free/creative and strict music theory
 --   - Proper voice leading rules: contrary motion, smooth voice movement, consonance
@@ -289,13 +294,81 @@ local function show_popup_menu(items, default_idx)
 end
 
 -- =============================
--- Auto-detection from region name
+-- Dialog - Step 0: Mode Selection (Auto vs Manual)
 -- =============================
 
+-- Declare ALL variables at top level BEFORE any goto statements to avoid scope issues
 local auto_detected_note_class = nil
 local auto_detected_scale = nil
 local auto_detected_octave = nil
 local region_name = nil
+local auto_detect_enabled
+local force_manual = false
+local root_note
+local scale_name
+local measures
+local min_notes
+local max_notes
+local min_keep
+local max_keep
+local num_voices
+local ca_mode
+local ca_growth_rate
+local ca_time_bias
+local poly_mode
+local theory_weight
+local chosen_scale_key
+local chosen_scale
+local auto_detect_items
+local default_auto_detect_idx
+local auto_detect_choice
+local default_root_note
+local target_octave
+local default_note_name
+local default_octave
+local default_note_idx
+local note_choice
+local octaves
+local default_octave_idx
+local octave_choice
+local scale_menu_items
+local default_scale_name
+local default_scale_idx
+local scale_choice
+local input_note_name
+local input_octave
+local poly_modes
+local default_poly_idx
+local poly_choice
+local captions
+local defaults_csv
+local ok
+local ret
+local fields
+
+local mode_items = {"Auto (use last settings)", "Manual (configure all settings)"}
+local mode_choice = show_popup_menu(mode_items, 1)
+if mode_choice == 0 then return end -- User cancelled
+
+local use_auto_mode = (mode_choice == 1)
+
+-- =============================
+-- AUTO MODE - Skip all dialogs and use saved settings
+-- =============================
+
+if use_auto_mode then
+    log('Auto mode selected - using last saved settings')
+    -- Jump directly to melody generation
+    goto GENERATE_MELODY
+end
+
+-- =============================
+-- MANUAL MODE - Show all dialogs
+-- =============================
+
+-- =============================
+-- Auto-detection from region name
+-- =============================
 
 if defaults.auto_detect then
     region_name = get_region_at_position()
@@ -308,11 +381,11 @@ if defaults.auto_detect then
 end
 
 -- =============================
--- Dialog - Step 0: Auto-detect Mode Toggle
+-- Dialog - Step 1a: Auto-detect Mode Toggle
 -- =============================
 
-local auto_detect_items = {"Auto-detect from region (ON)", "Manual selection (OFF)"}
-local default_auto_detect_idx = defaults.auto_detect and 1 or 2
+auto_detect_items = {"Auto-detect from region (ON)", "Manual selection (OFF)"}
+default_auto_detect_idx = defaults.auto_detect and 1 or 2
 
 -- If auto-detect found something, add option to override
 if auto_detected_note_class and auto_detected_scale then
@@ -323,13 +396,10 @@ if auto_detected_note_class and auto_detected_scale then
     end
 end
 
-local auto_detect_choice = show_popup_menu(auto_detect_items, default_auto_detect_idx)
+auto_detect_choice = show_popup_menu(auto_detect_items, default_auto_detect_idx)
 if auto_detect_choice == 0 then return end -- User cancelled
 
 -- Determine mode based on choice
-local auto_detect_enabled
-local force_manual = false
-
 if auto_detected_note_class and auto_detected_scale then
     -- Three-option menu
     if auto_detect_choice == 1 then
@@ -359,16 +429,13 @@ if auto_detect_enabled and not auto_detected_note_class then
 end
 
 -- =============================
--- Dialog - Step 1: Root Note Selection
+-- Dialog - Step 1b: Root Note Selection
 -- =============================
-
-local root_note
-local scale_name
 
 -- If auto-detect is enabled and successful, skip the dialogs (unless user chose to override)
 if auto_detect_enabled and auto_detected_note_class ~= nil and auto_detected_scale and not force_manual then
     -- Use auto-detected values
-    local target_octave = auto_detected_octave or 4
+    target_octave = auto_detected_octave or 4
     root_note = (target_octave + 1) * 12 + auto_detected_note_class
     -- Clamp to valid MIDI range
     if root_note < 0 then root_note = 0 end
@@ -376,8 +443,8 @@ if auto_detect_enabled and auto_detected_note_class ~= nil and auto_detected_sca
     scale_name = auto_detected_scale
 
     -- Show confirmation message
-    local root_name = note_names[(root_note % 12) + 1]
-    local octave = math.floor(root_note / 12) - 1
+    local root_name = note_names[(root_note % 12) + 1]  -- This is OK, only used in this block
+    local octave = math.floor(root_note / 12) - 1  -- This is OK, only used in this block
     reaper.MB(
         string.format('Region detected: "%s"\n\nUsing: %s%d %s',
             region_name, root_name, octave, scale_name),
@@ -387,19 +454,19 @@ if auto_detect_enabled and auto_detected_note_class ~= nil and auto_detected_sca
 else
     -- Manual selection mode
     -- If we have auto-detected values but user chose to override, use those as defaults
-    local default_root_note = defaults.root_note
+    default_root_note = defaults.root_note
     if auto_detected_note_class and auto_detected_octave then
-        local target_octave = auto_detected_octave or 4
+        target_octave = auto_detected_octave or 4
         default_root_note = (target_octave + 1) * 12 + auto_detected_note_class
         if default_root_note < 0 then default_root_note = 0 end
         if default_root_note > 127 then default_root_note = 127 end
     end
 
-    local default_note_name = note_names[(default_root_note % 12) + 1]
-    local default_octave = math.floor(default_root_note / 12) - 1
+    default_note_name = note_names[(default_root_note % 12) + 1]
+    default_octave = math.floor(default_root_note / 12) - 1
 
     -- Find default note index
-    local default_note_idx = 1
+    default_note_idx = 1
     for i, name in ipairs(note_names) do
         if name == default_note_name then
             default_note_idx = i
@@ -408,24 +475,24 @@ else
     end
 
     -- Show note selection menu
-    local note_choice = show_popup_menu(note_names, default_note_idx)
+    note_choice = show_popup_menu(note_names, default_note_idx)
     if note_choice == 0 then return end -- User cancelled
 
     -- Show octave selection menu
-    local octaves = {"0","1","2","3","4","5","6","7","8","9"}
-    local default_octave_idx = default_octave + 1 -- Convert to 1-based index
-    local octave_choice = show_popup_menu(octaves, default_octave_idx)
+    octaves = {"0","1","2","3","4","5","6","7","8","9"}
+    default_octave_idx = default_octave + 1 -- Convert to 1-based index
+    octave_choice = show_popup_menu(octaves, default_octave_idx)
     if octave_choice == 0 then return end -- User cancelled
 
     -- Show scale selection menu (with random option)
-    local scale_menu_items = {"random"}
+    scale_menu_items = {"random"}
     for _, name in ipairs(scale_keys) do
         table.insert(scale_menu_items, name)
     end
 
     -- Use auto-detected scale as default if overriding, otherwise use saved preference
-    local default_scale_name = auto_detected_scale or defaults.scale_name
-    local default_scale_idx = 1
+    default_scale_name = auto_detected_scale or defaults.scale_name
+    default_scale_idx = 1
     if default_scale_name ~= "random" then
         for i, name in ipairs(scale_menu_items) do
             if name == default_scale_name then
@@ -435,12 +502,12 @@ else
         end
     end
 
-    local scale_choice = show_popup_menu(scale_menu_items, default_scale_idx)
+    scale_choice = show_popup_menu(scale_menu_items, default_scale_idx)
     if scale_choice == 0 then return end -- User cancelled
 
     -- Process selections from menus
-    local input_note_name = note_names[note_choice]
-    local input_octave = tonumber(octaves[octave_choice])
+    input_note_name = note_names[note_choice]
+    input_octave = tonumber(octaves[octave_choice])
     scale_name = scale_menu_items[scale_choice]
     root_note = note_name_to_pitch(input_note_name, input_octave)
 end
@@ -450,17 +517,17 @@ end
 -- =============================
 
 -- Show polyphony mode selection menu (only if multiple voices)
-local poly_mode = 'free'
-local theory_weight = defaults.theory_weight
+poly_mode = 'free'
+theory_weight = defaults.theory_weight
 
 if defaults.num_voices > 1 then
-    local poly_modes = {"Free (Creative)", "Harmonic (Chords)", "Voice Leading (Counterpoint)"}
-    local default_poly_idx = 1
+    poly_modes = {"Free (Creative)", "Harmonic (Chords)", "Voice Leading (Counterpoint)"}
+    default_poly_idx = 1
     if defaults.poly_mode == 'harmonic' then default_poly_idx = 2
     elseif defaults.poly_mode == 'voice_leading' then default_poly_idx = 3
     end
 
-    local poly_choice = show_popup_menu(poly_modes, default_poly_idx)
+    poly_choice = show_popup_menu(poly_modes, default_poly_idx)
     if poly_choice == 0 then return end
 
     if poly_choice == 1 then poly_mode = 'free'
@@ -469,7 +536,7 @@ if defaults.num_voices > 1 then
     end
 end
 
-local captions = table.concat({
+captions = table.concat({
     'Measures',
     'Min Notes',
     'Max Notes',
@@ -482,7 +549,7 @@ local captions = table.concat({
     'Theory Weight (0=free 1=strict)'
 }, ',')
 
-local defaults_csv = table.concat({
+defaults_csv = table.concat({
     tostring(defaults.measures),
     tostring(defaults.min_notes),
     tostring(defaults.max_notes),
@@ -495,21 +562,21 @@ local defaults_csv = table.concat({
     tostring(theory_weight)
 }, ',')
 
-local ok, ret = reaper.GetUserInputs('jtp gen: Melody Generator - Parameters', 10, captions, defaults_csv)
+ok, ret = reaper.GetUserInputs('jtp gen: Melody Generator - Parameters', 10, captions, defaults_csv)
 if not ok then return end
 
-local fields = {}
+fields = {}
 for s in string.gmatch(ret .. ',', '([^,]*),') do fields[#fields+1] = s end
 
-local measures = tonumber(fields[1]) or defaults.measures
-local min_notes = tonumber(fields[2]) or defaults.min_notes
-local max_notes = tonumber(fields[3]) or defaults.max_notes
-local min_keep = tonumber(fields[4]) or defaults.min_keep
-local max_keep = tonumber(fields[5]) or defaults.max_keep
-local num_voices = tonumber(fields[6]) or defaults.num_voices
-local ca_mode = (tonumber(fields[7]) or 0) == 1
-local ca_growth_rate = tonumber(fields[8]) or 0.4
-local ca_time_bias = tonumber(fields[9]) or 0.6
+measures = tonumber(fields[1]) or defaults.measures
+min_notes = tonumber(fields[2]) or defaults.min_notes
+max_notes = tonumber(fields[3]) or defaults.max_notes
+min_keep = tonumber(fields[4]) or defaults.min_keep
+max_keep = tonumber(fields[5]) or defaults.max_keep
+num_voices = tonumber(fields[6]) or defaults.num_voices
+ca_mode = (tonumber(fields[7]) or 0) == 1
+ca_growth_rate = tonumber(fields[8]) or 0.4
+ca_time_bias = tonumber(fields[9]) or 0.6
 theory_weight = tonumber(fields[10]) or theory_weight
 
 -- Sanity checks
@@ -525,13 +592,12 @@ ca_time_bias = clamp(ca_time_bias, 0.0, 1.0)
 theory_weight = clamp(theory_weight, 0.0, 1.0)
 
 -- Resolve scale
-local chosen_scale_key
 if scale_name == 'random' or not scales[scale_name] then
     chosen_scale_key = choose_random(scale_keys)
 else
     chosen_scale_key = scale_name
 end
-local chosen_scale = scales[chosen_scale_key]
+chosen_scale = scales[chosen_scale_key]
 
 -- Persist for next run
 set_ext('measures', measures)
@@ -545,6 +611,37 @@ set_ext('num_voices', num_voices)
 set_ext('ca_mode', ca_mode and '1' or '0')
 set_ext('poly_mode', poly_mode)
 set_ext('theory_weight', theory_weight)
+
+-- =============================
+-- GENERATE_MELODY label for auto mode
+-- =============================
+
+::GENERATE_MELODY::
+
+-- If we jumped here from auto mode, we need to declare the variables
+-- Otherwise they were set by the manual dialogs
+if use_auto_mode then
+    measures = defaults.measures
+    min_notes = defaults.min_notes
+    max_notes = defaults.max_notes
+    min_keep = defaults.min_keep
+    max_keep = defaults.max_keep
+    root_note = defaults.root_note
+    num_voices = defaults.num_voices
+    ca_mode = defaults.ca_mode
+    ca_growth_rate = 0.4
+    ca_time_bias = 0.6
+    poly_mode = defaults.poly_mode
+    theory_weight = defaults.theory_weight
+
+    -- Resolve scale
+    if defaults.scale_name == 'random' or not scales[defaults.scale_name] then
+        chosen_scale_key = choose_random(scale_keys)
+    else
+        chosen_scale_key = defaults.scale_name
+    end
+    chosen_scale = scales[chosen_scale_key]
+end
 
 -- =============================
 -- Music Theory & Voice Leading Engine

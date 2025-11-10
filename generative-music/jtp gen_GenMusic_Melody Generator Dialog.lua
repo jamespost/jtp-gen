@@ -89,8 +89,10 @@ local scales = {
     blues = {0,3,5,6,7,10}
 }
 
+-- Build sorted scale list for consistent menu ordering
 local scale_keys = {}
 for k in pairs(scales) do scale_keys[#scale_keys+1] = k end
+table.sort(scale_keys)
 
 -- =============================
 -- Helpers

@@ -9,7 +9,7 @@
 -- Check if reaper API is available
 if not reaper then return end
 
-local DEBUG = true
+local DEBUG = false
 
 local function log(...)
     if not DEBUG then return end
@@ -43,7 +43,8 @@ local defaults = {
     min_keep = tonumber(get_ext('min_keep', 12)),
     max_keep = tonumber(get_ext('max_keep', 24)),
     root_note = tonumber(get_ext('root_note', 60)), -- Middle C
-    scale_name = get_ext('scale_name', 'random') -- type a name from list below or 'random'
+    scale_name = get_ext('scale_name', 'random'), -- type a name from list below or 'random'
+    num_voices = tonumber(get_ext('num_voices', 1)) -- Number of melodic voices (1-16)
 }
 
 -- Small curated scale list (intervals from root)
@@ -90,7 +91,8 @@ local captions = table.concat({
     'Min Keep',
     'Max Keep',
     'Root Note (0-127)',
-    'Scale (name or "random")'
+    'Scale (name or "random")',
+    'Number of Voices (1-16)'
 }, ',')
 
 local defaults_csv = table.concat({
@@ -100,10 +102,11 @@ local defaults_csv = table.concat({
     tostring(defaults.min_keep),
     tostring(defaults.max_keep),
     tostring(defaults.root_note),
-    tostring(defaults.scale_name)
+    tostring(defaults.scale_name),
+    tostring(defaults.num_voices)
 }, ',')
 
-local ok, ret = reaper.GetUserInputs('jtp gen: Melody Generator', 7, captions, defaults_csv)
+local ok, ret = reaper.GetUserInputs('jtp gen: Melody Generator', 8, captions, defaults_csv)
 if not ok then return end
 
 local fields = {}
@@ -116,6 +119,7 @@ local min_keep = tonumber(fields[4]) or defaults.min_keep
 local max_keep = tonumber(fields[5]) or defaults.max_keep
 local root_note = tonumber(fields[6]) or defaults.root_note
 local scale_name = (fields[7] and fields[7]:lower()) or defaults.scale_name
+local num_voices = tonumber(fields[8]) or defaults.num_voices
 
 -- Sanity checks
 measures = clamp(math.floor(measures + 0.5), 1, 128)
@@ -124,6 +128,7 @@ max_notes = clamp(math.floor(max_notes + 0.5), min_notes, 256)
 min_keep = clamp(math.floor(min_keep + 0.5), 0, 1000)
 max_keep = clamp(math.floor(max_keep + 0.5), min_keep, 2000)
 root_note = clamp(math.floor(root_note + 0.5), 0, 127)
+num_voices = clamp(math.floor(num_voices + 0.5), 1, 16)
 
 -- Resolve scale
 local chosen_scale_key
@@ -142,6 +147,7 @@ set_ext('min_keep', min_keep)
 set_ext('max_keep', max_keep)
 set_ext('root_note', root_note)
 set_ext('scale_name', chosen_scale_key)
+set_ext('num_voices', num_voices)
 
 -- =============================
 -- Melody generation
@@ -243,59 +249,86 @@ local function find_index(t, v)
     return 1
 end
 
--- Simple motion logic
+-- Simple motion logic constants
 local MAX_REPEATED = 0
 local NOTE_VARIETY = 0.99
 local BIG_JUMP_CHANCE = 0.1
 local BIG_JUMP_INTERVAL = 4
-local repeated = 0
-local direction = (math.random(2) == 1) and 1 or -1
 
-local function next_note(prev_note, prev_dur)
-    local move = 0
-    if repeated >= MAX_REPEATED or math.random() < NOTE_VARIETY then
-        move = direction
-        if math.random() > 0.7 then move = -move end
-        repeated = 0
-    else
-        if math.random() < BIG_JUMP_CHANCE then
-            move = (math.random(2) == 1 and -1 or 1) * math.random(1, BIG_JUMP_INTERVAL)
+-- Generate a single voice of melody
+local function generate_voice(channel)
+    local repeated = 0
+    local direction = (math.random(2) == 1) and 1 or -1
+
+    local function next_note(prev_note, prev_dur)
+        local move = 0
+        if repeated >= MAX_REPEATED or math.random() < NOTE_VARIETY then
+            move = direction
+            if math.random() > 0.7 then move = -move end
             repeated = 0
+        else
+            if math.random() < BIG_JUMP_CHANCE then
+                move = (math.random(2) == 1 and -1 or 1) * math.random(1, BIG_JUMP_INTERVAL)
+                repeated = 0
+            end
+        end
+        local idx = find_index(scale_notes, prev_note)
+        local new_idx = clamp(idx + move, 1, #scale_notes)
+        local vel = vel_for_dur(prev_dur)
+        return scale_notes[new_idx], vel
+    end
+
+    -- Note count and pruning for this voice
+    local NUM_NOTES = math.random(min_notes, max_notes)
+    local notes_to_keep = math.random(min_keep, max_keep)
+
+    -- Insert first note
+    local prev_note = scale_notes[math.random(1, #scale_notes)]
+    local prev_dur = pick_duration(quarter_note)
+    local note_start = start_time
+    reaper.MIDI_InsertNote(take, false, false, timeToPPQ(note_start), timeToPPQ(note_start + prev_dur), channel, prev_note, math.random(60,100), false)
+
+    local note_end = note_start + prev_dur
+    for i = 2, NUM_NOTES do
+        prev_note, vel = next_note(prev_note, prev_dur)
+        prev_dur = pick_duration(prev_dur)
+        note_start = note_end
+        note_end = note_start + prev_dur
+        reaper.MIDI_InsertNote(take, false, false, timeToPPQ(note_start), timeToPPQ(note_end), channel, prev_note, vel, false)
+    end
+
+    -- Optionally prune notes for this voice
+    -- We need to count notes on this channel only
+    local voice_note_count = 0
+    local _, total_cnt = reaper.MIDI_CountEvts(take)
+    for i = 0, total_cnt - 1 do
+        local _, _, _, _, _, chan = reaper.MIDI_GetNote(take, i)
+        if chan == channel then voice_note_count = voice_note_count + 1 end
+    end
+
+    -- Delete excess notes on this channel (from end)
+    if voice_note_count > notes_to_keep then
+        local deleted = 0
+        for i = total_cnt - 1, 0, -1 do
+            if deleted >= (voice_note_count - notes_to_keep) then break end
+            local _, _, _, _, _, chan = reaper.MIDI_GetNote(take, i)
+            if chan == channel then
+                reaper.MIDI_DeleteNote(take, i)
+                deleted = deleted + 1
+            end
         end
     end
-    local idx = find_index(scale_notes, prev_note)
-    local new_idx = clamp(idx + move, 1, #scale_notes)
-    local vel = vel_for_dur(prev_dur)
-    return scale_notes[new_idx], vel
 end
 
--- Note count and pruning
-local NUM_NOTES = math.random(min_notes, max_notes)
-local notes_to_keep = math.random(min_keep, max_keep)
-
--- Insert first note
+-- Initialize random seed
 math.randomseed(reaper.time_precise())
 for _ = 1,10 do math.random() end
 
-local prev_note = scale_notes[math.random(1, #scale_notes)]
-local prev_dur = pick_duration(quarter_note)
-local note_start = start_time
 reaper.Undo_BeginBlock()
-reaper.MIDI_InsertNote(take, false, false, timeToPPQ(note_start), timeToPPQ(note_start + prev_dur), 0, prev_note, math.random(60,100), false)
 
-local note_end = note_start + prev_dur
-for i = 2, NUM_NOTES do
-    prev_note, vel = next_note(prev_note, prev_dur)
-    prev_dur = pick_duration(prev_dur)
-    note_start = note_end
-    note_end = note_start + prev_dur
-    reaper.MIDI_InsertNote(take, false, false, timeToPPQ(note_start), timeToPPQ(note_end), 0, prev_note, vel, false)
-end
-
--- Optionally prune notes
-local _, cnt = reaper.MIDI_CountEvts(take)
-for i = cnt-1, notes_to_keep, -1 do
-    reaper.MIDI_DeleteNote(take, i)
+-- Generate all voices
+for voice = 0, num_voices - 1 do
+    generate_voice(voice)
 end
 
 -- Name the take

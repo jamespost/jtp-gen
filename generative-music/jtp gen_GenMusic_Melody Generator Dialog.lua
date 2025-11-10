@@ -82,16 +82,85 @@ local function table_contains(t, x)
 end
 
 -- =============================
--- Dialog
+-- Dialog helpers
+-- =============================
+local note_names = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"}
+
+local function note_name_to_pitch(name, octave)
+    for i, n in ipairs(note_names) do
+        if n == name then
+            return (octave + 1) * 12 + (i - 1)
+        end
+    end
+    return nil
+end
+
+local function show_popup_menu(items, default_idx)
+    -- Build menu string for gfx.showmenu with checkmark on default
+    local menu_str = ""
+    for i, item in ipairs(items) do
+        if i == default_idx then
+            menu_str = menu_str .. "!" .. item .. "|"
+        else
+            menu_str = menu_str .. item .. "|"
+        end
+    end
+
+    -- Position menu at mouse cursor
+    gfx.x, gfx.y = reaper.GetMousePosition()
+    local choice = gfx.showmenu(menu_str)
+    return choice -- Returns 0 if cancelled, or 1-based index of selection
+end
+
+-- =============================
+-- Dialog - Step 1: Root Note Selection
 -- =============================
 
 -- Convert stored root_note to note name and octave for display
-local note_names = {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"}
 local default_note_name = note_names[(defaults.root_note % 12) + 1]
 local default_octave = math.floor(defaults.root_note / 12) - 1
 
--- Build scale list for display
-local scale_list = table.concat(scale_keys, ', ')
+-- Find default note index
+local default_note_idx = 1
+for i, name in ipairs(note_names) do
+    if name == default_note_name then
+        default_note_idx = i
+        break
+    end
+end
+
+-- Show note selection menu
+local note_choice = show_popup_menu(note_names, default_note_idx)
+if note_choice == 0 then return end -- User cancelled
+
+-- Show octave selection menu
+local octaves = {"0","1","2","3","4","5","6","7","8","9"}
+local default_octave_idx = default_octave + 1 -- Convert to 1-based index
+local octave_choice = show_popup_menu(octaves, default_octave_idx)
+if octave_choice == 0 then return end -- User cancelled
+
+-- Show scale selection menu (with random option)
+local scale_menu_items = {"random"}
+for _, name in ipairs(scale_keys) do
+    table.insert(scale_menu_items, name)
+end
+
+local default_scale_idx = 1
+if defaults.scale_name ~= "random" then
+    for i, name in ipairs(scale_menu_items) do
+        if name == defaults.scale_name then
+            default_scale_idx = i
+            break
+        end
+    end
+end
+
+local scale_choice = show_popup_menu(scale_menu_items, default_scale_idx)
+if scale_choice == 0 then return end -- User cancelled
+
+-- =============================
+-- Dialog - Step 2: Generation Parameters
+-- =============================
 
 local captions = table.concat({
     'Measures',
@@ -99,9 +168,6 @@ local captions = table.concat({
     'Max Notes',
     'Min Keep',
     'Max Keep',
-    'Root Note (C, C#, D, etc.)',
-    'Root Octave (0-9)',
-    'Scale (' .. scale_list .. ' or "random")',
     'Number of Voices (1-16)'
 }, ',')
 
@@ -111,13 +177,10 @@ local defaults_csv = table.concat({
     tostring(defaults.max_notes),
     tostring(defaults.min_keep),
     tostring(defaults.max_keep),
-    tostring(default_note_name),
-    tostring(default_octave),
-    tostring(defaults.scale_name),
     tostring(defaults.num_voices)
 }, ',')
 
-local ok, ret = reaper.GetUserInputs('jtp gen: Melody Generator', 9, captions .. ',extrawidth=200', defaults_csv)
+local ok, ret = reaper.GetUserInputs('jtp gen: Melody Generator - Parameters', 6, captions, defaults_csv)
 if not ok then return end
 
 local fields = {}
@@ -128,26 +191,14 @@ local min_notes = tonumber(fields[2]) or defaults.min_notes
 local max_notes = tonumber(fields[3]) or defaults.max_notes
 local min_keep = tonumber(fields[4]) or defaults.min_keep
 local max_keep = tonumber(fields[5]) or defaults.max_keep
-local input_note_name = (fields[6] or default_note_name):upper()
-local input_octave = tonumber(fields[7]) or default_octave
-local scale_name = (fields[8] and fields[8]:lower()) or defaults.scale_name
-local num_voices = tonumber(fields[9]) or defaults.num_voices
+local num_voices = tonumber(fields[6]) or defaults.num_voices
 
--- Convert note name and octave to MIDI note number
-local function note_name_to_pitch(name, octave)
-    for i, n in ipairs(note_names) do
-        if n == name then
-            return (octave + 1) * 12 + (i - 1)
-        end
-    end
-    return nil
-end
+-- Process selections from menus
+local input_note_name = note_names[note_choice]
+local input_octave = tonumber(octaves[octave_choice])
+local scale_name = scale_menu_items[scale_choice]
 
 local root_note = note_name_to_pitch(input_note_name, input_octave)
-if not root_note then
-    reaper.ShowMessageBox('Invalid note name. Use format like: C, C#, D, etc.', 'Invalid Input', 0)
-    return
-end
 
 -- Sanity checks
 measures = clamp(math.floor(measures + 0.5), 1, 128)

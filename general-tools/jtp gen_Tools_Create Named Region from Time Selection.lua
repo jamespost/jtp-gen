@@ -27,6 +27,7 @@ end
 
 -- Configuration
 local CONFIG = {
+    debug = false,  -- Set to true to enable console logging
     adjectives = {
         "Ancient", "Azure", "Blazing", "Broken", "Buried", "Burning",
         "Cascading", "Celestial", "Coiled", "Crimson", "Crystal", "Drifting",
@@ -62,7 +63,9 @@ local CONFIG = {
 
 -- Helper functions
 local function log(message)
-    reaper.ShowConsoleMsg(tostring(message) .. "\n")
+    if CONFIG.debug then
+        reaper.ShowConsoleMsg(tostring(message) .. "\n")
+    end
 end
 
 -- Generate a seed from the current timestamp and project state

@@ -59,7 +59,8 @@ local defaults = {
     root_note = tonumber(get_ext('root_note', 60)), -- Middle C
     scale_name = get_ext('scale_name', 'random'), -- type a name from list below or 'random'
     num_voices = tonumber(get_ext('num_voices', 1)), -- Number of melodic voices (1-16)
-    auto_detect = get_ext('auto_detect', '1') == '1' -- Auto-detect from region name (default enabled)
+    auto_detect = get_ext('auto_detect', '1') == '1', -- Auto-detect from region name (default enabled)
+    ca_mode = get_ext('ca_mode', '0') == '1' -- Cellular Automata mode (default disabled)
 }
 
 -- Small curated scale list (intervals from root)
@@ -443,7 +444,10 @@ local captions = table.concat({
     'Max Notes',
     'Min Keep',
     'Max Keep',
-    'Number of Voices (1-16)'
+    'Number of Voices (1-16)',
+    'CA Mode (0=off 1=on)',
+    'CA: Growth Rate (0.1-1.0)',
+    'CA: Time Bias (0-1, 0.5=equal)'
 }, ',')
 
 local defaults_csv = table.concat({
@@ -452,10 +456,13 @@ local defaults_csv = table.concat({
     tostring(defaults.max_notes),
     tostring(defaults.min_keep),
     tostring(defaults.max_keep),
-    tostring(defaults.num_voices)
+    tostring(defaults.num_voices),
+    defaults.ca_mode and '1' or '0',
+    '0.4',  -- Default growth rate
+    '0.6'   -- Default time bias (prefers horizontal)
 }, ',')
 
-local ok, ret = reaper.GetUserInputs('jtp gen: Melody Generator - Parameters', 6, captions, defaults_csv)
+local ok, ret = reaper.GetUserInputs('jtp gen: Melody Generator - Parameters', 9, captions, defaults_csv)
 if not ok then return end
 
 local fields = {}
@@ -467,6 +474,9 @@ local max_notes = tonumber(fields[3]) or defaults.max_notes
 local min_keep = tonumber(fields[4]) or defaults.min_keep
 local max_keep = tonumber(fields[5]) or defaults.max_keep
 local num_voices = tonumber(fields[6]) or defaults.num_voices
+local ca_mode = (tonumber(fields[7]) or 0) == 1
+local ca_growth_rate = tonumber(fields[8]) or 0.4
+local ca_time_bias = tonumber(fields[9]) or 0.6
 
 -- Sanity checks
 measures = clamp(math.floor(measures + 0.5), 1, 128)
@@ -476,6 +486,8 @@ min_keep = clamp(math.floor(min_keep + 0.5), 0, 1000)
 max_keep = clamp(math.floor(max_keep + 0.5), min_keep, 2000)
 root_note = clamp(math.floor(root_note + 0.5), 0, 127)
 num_voices = clamp(math.floor(num_voices + 0.5), 1, 16)
+ca_growth_rate = clamp(ca_growth_rate, 0.1, 1.0)
+ca_time_bias = clamp(ca_time_bias, 0.0, 1.0)
 
 -- Resolve scale
 local chosen_scale_key
@@ -495,6 +507,197 @@ set_ext('max_keep', max_keep)
 set_ext('root_note', root_note)
 set_ext('scale_name', chosen_scale_key)
 set_ext('num_voices', num_voices)
+set_ext('ca_mode', ca_mode and '1' or '0')
+
+-- =============================
+-- 2D Cellular Automata Engine - "Growing Mold"
+-- =============================
+
+-- Cell structure: {time_step, scale_idx, age, voice_id}
+-- Grid is stored as grid[time_step][scale_idx] = cell or nil
+
+-- Configuration for CA growth
+local CA_CONFIG = {
+    spawn_prob = ca_mode and ca_growth_rate or 0.4,           -- Probability of spawning a neighbor
+    horizontal_bias = ca_mode and ca_time_bias or 0.6,        -- 0.5 = equal, >0.5 = prefers time direction
+    max_age = 8,                                              -- Cells die after this many generations
+    initial_seeds = 2,                                        -- Number of starting cells
+    max_poly_per_slice = nil,                                 -- Set dynamically based on num_voices
+}
+
+-- Create empty 2D grid
+local function create_grid(time_steps, scale_size)
+    local grid = {}
+    for t = 1, time_steps do
+        grid[t] = {}
+        for s = 1, scale_size do
+            grid[t][s] = nil
+        end
+    end
+    return grid
+end
+
+-- Count living cells at a specific time slice (for polyphony limiting)
+local function count_cells_at_time(grid, time_step)
+    local count = 0
+    for scale_idx, cell in pairs(grid[time_step] or {}) do
+        if cell then count = count + 1 end
+    end
+    return count
+end
+
+-- Check if position is valid and empty
+local function is_valid_position(grid, time_step, scale_idx, time_steps, scale_size)
+    if time_step < 1 or time_step > time_steps then return false end
+    if scale_idx < 1 or scale_idx > scale_size then return false end
+    if grid[time_step][scale_idx] ~= nil then return false end
+    return true
+end
+
+-- Try to spawn a new cell from parent
+local function try_spawn(grid, parent_cell, direction, time_steps, scale_size, max_poly)
+    local new_time = parent_cell.time_step
+    local new_scale = parent_cell.scale_idx
+
+    -- Apply direction: 1=up, 2=down, 3=left, 4=right
+    if direction == 1 then new_scale = new_scale + 1      -- up (higher pitch)
+    elseif direction == 2 then new_scale = new_scale - 1  -- down (lower pitch)
+    elseif direction == 3 then new_time = new_time - 1    -- left (earlier time)
+    elseif direction == 4 then new_time = new_time + 1    -- right (later time)
+    end
+
+    -- Check validity
+    if not is_valid_position(grid, new_time, new_scale, time_steps, scale_size) then
+        return false
+    end
+
+    -- Check polyphony constraint
+    if count_cells_at_time(grid, new_time) >= max_poly then
+        return false
+    end
+
+    -- Check spawn probability
+    if math.random() > CA_CONFIG.spawn_prob then
+        return false
+    end
+
+    -- Spawn the cell
+    grid[new_time][new_scale] = {
+        time_step = new_time,
+        scale_idx = new_scale,
+        age = 0,
+        voice_id = parent_cell.voice_id
+    }
+
+    return true
+end
+
+-- Evolve the 2D CA grid for one generation
+local function evolve_2d_ca(grid, time_steps, scale_size, max_poly)
+    local all_cells = {}
+
+    -- Collect all living cells
+    for t = 1, time_steps do
+        for s = 1, scale_size do
+            if grid[t][s] then
+                table.insert(all_cells, grid[t][s])
+            end
+        end
+    end
+
+    -- Age all cells and mark for death
+    local cells_to_remove = {}
+    for _, cell in ipairs(all_cells) do
+        cell.age = cell.age + 1
+        if cell.age >= CA_CONFIG.max_age then
+            table.insert(cells_to_remove, cell)
+        end
+    end
+
+    -- Remove dead cells
+    for _, cell in ipairs(cells_to_remove) do
+        grid[cell.time_step][cell.scale_idx] = nil
+    end
+
+    -- Try to spawn new cells from living cells
+    -- Shuffle to randomize growth order
+    for i = #all_cells, 2, -1 do
+        local j = math.random(i)
+        all_cells[i], all_cells[j] = all_cells[j], all_cells[i]
+    end
+
+    for _, cell in ipairs(all_cells) do
+        if grid[cell.time_step] and grid[cell.time_step][cell.scale_idx] then
+            -- Cell still alive, try to spawn
+
+            -- Determine which directions to try based on bias
+            local directions = {}
+            if math.random() < CA_CONFIG.horizontal_bias then
+                -- Prefer horizontal (time) first
+                directions = {4, 3, 1, 2}  -- right, left, up, down
+            else
+                -- Prefer vertical (pitch) first
+                directions = {1, 2, 4, 3}  -- up, down, right, left
+            end
+
+            -- Try one random direction
+            local dir = directions[math.random(1, #directions)]
+            try_spawn(grid, cell, dir, time_steps, scale_size, max_poly)
+        end
+    end
+end
+
+-- Generate 2D CA grid and return as note list
+local function generate_2d_ca_notes(time_steps, scale_size, num_voices)
+    CA_CONFIG.max_poly_per_slice = num_voices
+
+    local grid = create_grid(time_steps, scale_size)
+
+    -- Plant initial seeds at random positions
+    for seed = 1, CA_CONFIG.initial_seeds do
+        local rand_time = math.random(1, math.ceil(time_steps / 2))
+        local rand_scale = math.random(1, scale_size)
+
+        -- Make sure it's empty
+        local attempts = 0
+        while grid[rand_time][rand_scale] ~= nil and attempts < 20 do
+            rand_time = math.random(1, time_steps)
+            rand_scale = math.random(1, scale_size)
+            attempts = attempts + 1
+        end
+
+        grid[rand_time][rand_scale] = {
+            time_step = rand_time,
+            scale_idx = rand_scale,
+            age = 0,
+            voice_id = seed - 1  -- 0-indexed for MIDI channel
+        }
+    end
+
+    -- Evolve for multiple generations
+    local generations = math.max(10, time_steps / 2)
+    for gen = 1, generations do
+        evolve_2d_ca(grid, time_steps, scale_size, CA_CONFIG.max_poly_per_slice)
+    end
+
+    -- Convert grid to note list
+    local notes = {}
+    for t = 1, time_steps do
+        for s = 1, scale_size do
+            if grid[t][s] then
+                table.insert(notes, {
+                    time_step = t,
+                    scale_idx = s,
+                    voice_id = grid[t][s].voice_id,
+                    age = grid[t][s].age  -- Can use for velocity/duration
+                })
+            end
+        end
+    end
+
+    log('Generated ', #notes, ' notes from 2D CA')
+    return notes
+end
 
 -- =============================
 -- Melody generation
@@ -602,80 +805,132 @@ local NOTE_VARIETY = 0.99
 local BIG_JUMP_CHANCE = 0.1
 local BIG_JUMP_INTERVAL = 4
 
--- Generate a single voice of melody
-local function generate_voice(channel)
-    local repeated = 0
-    local direction = (math.random(2) == 1) and 1 or -1
-
-    local function next_note(prev_note, prev_dur)
-        local move = 0
-        if repeated >= MAX_REPEATED or math.random() < NOTE_VARIETY then
-            move = direction
-            if math.random() > 0.7 then move = -move end
-            repeated = 0
-        else
-            if math.random() < BIG_JUMP_CHANCE then
-                move = (math.random(2) == 1 and -1 or 1) * math.random(1, BIG_JUMP_INTERVAL)
-                repeated = 0
-            end
-        end
-        local idx = find_index(scale_notes, prev_note)
-        local new_idx = clamp(idx + move, 1, #scale_notes)
-        local vel = vel_for_dur(prev_dur)
-        return scale_notes[new_idx], vel
-    end
-
-    -- Note count and pruning for this voice
-    local NUM_NOTES = math.random(min_notes, max_notes)
-    local notes_to_keep = math.random(min_keep, max_keep)
-
-    -- Insert first note
-    local prev_note = scale_notes[math.random(1, #scale_notes)]
-    local prev_dur = pick_duration(quarter_note)
-    local note_start = start_time
-    reaper.MIDI_InsertNote(take, false, false, timeToPPQ(note_start), timeToPPQ(note_start + prev_dur), channel, prev_note, math.random(60,100), false)
-
-    local note_end = note_start + prev_dur
-    for i = 2, NUM_NOTES do
-        prev_note, vel = next_note(prev_note, prev_dur)
-        prev_dur = pick_duration(prev_dur)
-        note_start = note_end
-        note_end = note_start + prev_dur
-        reaper.MIDI_InsertNote(take, false, false, timeToPPQ(note_start), timeToPPQ(note_end), channel, prev_note, vel, false)
-    end
-
-    -- Optionally prune notes for this voice
-    -- We need to count notes on this channel only
-    local voice_note_count = 0
-    local _, total_cnt = reaper.MIDI_CountEvts(take)
-    for i = 0, total_cnt - 1 do
-        local _, _, _, _, _, chan = reaper.MIDI_GetNote(take, i)
-        if chan == channel then voice_note_count = voice_note_count + 1 end
-    end
-
-    -- Delete excess notes on this channel (from end)
-    if voice_note_count > notes_to_keep then
-        local deleted = 0
-        for i = total_cnt - 1, 0, -1 do
-            if deleted >= (voice_note_count - notes_to_keep) then break end
-            local _, _, _, _, _, chan = reaper.MIDI_GetNote(take, i)
-            if chan == channel then
-                reaper.MIDI_DeleteNote(take, i)
-                deleted = deleted + 1
-            end
-        end
-    end
-end
-
 -- Initialize random seed
 math.randomseed(reaper.time_precise())
 for _ = 1,10 do math.random() end
 
 reaper.Undo_BeginBlock()
 
--- Generate all voices
-for voice = 0, num_voices - 1 do
-    generate_voice(voice)
+-- =============================
+-- CELLULAR AUTOMATA MODE
+-- =============================
+if ca_mode then
+    log('Using 2D CA mode - growing mold algorithm')
+
+    -- Calculate time grid resolution
+    local time_resolution = eighth_note  -- Each step is an 8th note
+    local total_duration = end_time - start_time
+    local time_steps = math.floor(total_duration / time_resolution)
+
+    log('Time steps: ', time_steps, ', Scale size: ', #scale_notes)
+
+    -- Generate 2D CA notes
+    local ca_notes = generate_2d_ca_notes(time_steps, #scale_notes, num_voices)
+
+    -- Insert notes from CA grid into MIDI
+    for _, note_data in ipairs(ca_notes) do
+        local note_time = start_time + ((note_data.time_step - 1) * time_resolution)
+        local note_pitch = scale_notes[note_data.scale_idx]
+        local note_duration = time_resolution  -- Could vary based on age
+        local note_velocity = math.random(60, 100)  -- Could use age for velocity
+        local note_channel = note_data.voice_id
+
+        reaper.MIDI_InsertNote(
+            take, false, false,
+            timeToPPQ(note_time),
+            timeToPPQ(note_time + note_duration),
+            note_channel,
+            note_pitch,
+            note_velocity,
+            false
+        )
+    end
+
+-- =============================
+-- STANDARD MODE (Traditional)
+-- =============================
+else
+    log('Using standard mode - walking melody algorithm')
+
+    -- Simple motion logic constants
+    local MAX_REPEATED = 0
+    local NOTE_VARIETY = 0.99
+    local BIG_JUMP_CHANCE = 0.1
+    local BIG_JUMP_INTERVAL = 4
+
+    -- Generate a single voice of melody
+    local function generate_voice(channel)
+        -- Note count and pruning for this voice
+        local NUM_NOTES = math.random(min_notes, max_notes)
+        local notes_to_keep = math.random(min_keep, max_keep)
+
+        -- STANDARD MODE: Walking motion logic
+        local repeated = 0
+        local direction = (math.random(2) == 1) and 1 or -1
+
+        local function next_note(prev_note, prev_dur)
+            local move = 0
+            if repeated >= MAX_REPEATED or math.random() < NOTE_VARIETY then
+                move = direction
+                if math.random() > 0.7 then move = -move end
+                repeated = 0
+            else
+                if math.random() < BIG_JUMP_CHANCE then
+                    move = (math.random(2) == 1 and -1 or 1) * math.random(1, BIG_JUMP_INTERVAL)
+                    repeated = 0
+                end
+            end
+            local idx = find_index(scale_notes, prev_note)
+            local new_idx = clamp(idx + move, 1, #scale_notes)
+            local vel = vel_for_dur(prev_dur)
+            return scale_notes[new_idx], vel
+        end
+
+        -- Insert first note
+        local prev_note = scale_notes[math.random(1, #scale_notes)]
+        local prev_dur = pick_duration(quarter_note)
+        local note_start = start_time
+        reaper.MIDI_InsertNote(take, false, false, timeToPPQ(note_start), timeToPPQ(note_start + prev_dur), channel, prev_note, math.random(60,100), false)
+
+        local note_end = note_start + prev_dur
+        for i = 2, NUM_NOTES do
+            -- Standard mode: use walking motion
+            local vel
+            prev_note, vel = next_note(prev_note, prev_dur)
+
+            prev_dur = pick_duration(prev_dur)
+            note_start = note_end
+            note_end = note_start + prev_dur
+            reaper.MIDI_InsertNote(take, false, false, timeToPPQ(note_start), timeToPPQ(note_end), channel, prev_note, vel_for_dur(prev_dur), false)
+        end
+
+        -- Optionally prune notes for this voice
+        -- We need to count notes on this channel only
+        local voice_note_count = 0
+        local _, total_cnt = reaper.MIDI_CountEvts(take)
+        for i = 0, total_cnt - 1 do
+            local _, _, _, _, _, chan = reaper.MIDI_GetNote(take, i)
+            if chan == channel then voice_note_count = voice_note_count + 1 end
+        end
+
+        -- Delete excess notes on this channel (from end)
+        if voice_note_count > notes_to_keep then
+            local deleted = 0
+            for i = total_cnt - 1, 0, -1 do
+                if deleted >= (voice_note_count - notes_to_keep) then break end
+                local _, _, _, _, _, chan = reaper.MIDI_GetNote(take, i)
+                if chan == channel then
+                    reaper.MIDI_DeleteNote(take, i)
+                    deleted = deleted + 1
+                end
+            end
+        end
+    end
+
+    -- Generate all voices
+    for voice = 0, num_voices - 1 do
+        generate_voice(voice)
+    end
 end
 
 -- Name the take

@@ -12,7 +12,7 @@ This document outlines a step-by-step plan for improving the core melody generat
 | 2 | Implement phrase-based structure instead of note-by-note | Completed | Replaced note-by-note generation with phrase objects (4-8 notes). Each phrase has contour type (arch/ascending/descending/valley/wave), internal coherence. Added contrast logic that varies next phrase based on previous contour. Implemented in generate_voice function. |
 | 3 | Add melodic memory and motif repetition system | Completed | Added phrase_memory buffer (3-5 phrases), motif_repeat_chance parameter (0-100%, default 40%). Implemented retrieve_motif() with three variation types: transposition (2-5 scale degrees), augmentation (1.5x), and diminution (0.75x). Integrated into generate_voice function. Creates recognizable melodic themes. Version bumped to 1.8. |
 | 4 | Replace random pruning with intelligent phrase-aware deletion | Not Started |  |
-| 5 | Implement goal-oriented movement with tension/release | Not Started |  |
+| 5 | Implement goal-oriented movement with tension/release | Completed | Added target note system (tonic/mediant/dominant), sectioning (intro/dev/conclusion), bias toward targets, leap bias when far, final tonic resolution. Implemented in jtp gen_GenMusic_Melody Generator Dialog.lua v1.9. |
 | 6 | Improve contour shaping with musical context | Not Started |  |
 | 7 | Couple rhythm and pitch with musical relationships | Not Started |  |
 | 8 | Add configurable algorithm parameters to dialog | Not Started |  |
@@ -42,17 +42,25 @@ This document outlines a step-by-step plan for improving the core melody generat
 - Creates recognizable melodic themes
 - Implementation: Added phrase_memory buffer, retrieve_motif() function with three variation types, integrated motif repetition check into generate_voice() with configurable probability
 
-### 4. Replace Random Pruning with Intelligent Phrase-Aware Deletion
+### 4. Replace Random Pruning with Intelligent Phrase-Aware Deletion TOO PROBLEMATIC TO IMPLEMENT AS OF NOW (pruning adjustements are likely to create empty MIDI items)
 - Current pruning randomly deletes notes, destroying patterns
 - New approach: identify phrase boundaries (duration gaps, melodic leaps), preserve complete phrases, delete entire weak phrases instead of random notes
 - Criteria for 'weak': too short (<3 notes), low variety, poor contour
 - Lines 1369-1380
 
-### 5. Implement Goal-Oriented Movement with Tension/Release
-- Add target_note system: melody aims toward specific scale degrees (tonic, dominant, mediant)
-- Divide generation into sections with different tension levels: intro (low), development (high), conclusion (resolves to tonic)
-- Bias movement toward target as phrase progresses
-- Increase leap probability when far from target
+### 5. Implement Goal-Oriented Movement with Tension/Release COMPLETE
+- Target note system added: phrases aim toward scale degrees 1 (tonic), 3 (mediant where available), and 5 (dominant)
+- Sectioning: intro (low tension), development (high tension), conclusion (resolve to tonic)
+- Movement bias: within phrase generation, step choices are nudged toward the section target with strength increasing across the phrase
+- Leap bias: when far from target during development, leaps are more likely in the direction of the target
+- Final resolution: last phrase resolves to the tonic and uses a longer ending note
+- Implementation details:
+	- Version bumped to 1.9 with header notes
+	- New helpers: tension_factor(), degree_index_or_closest(), nudge_toward()
+	- generate_phrase(...) extended with opts: {target_idx, tension_level, section, is_final}
+	- generate_voice(...) divides phrases into intro/dev/conclusion and passes target/section info
+	- Ensures last note per voice is tonic; conclusion last duration at least a half note
+	- File: generative-music/jtp gen_GenMusic_Melody Generator Dialog.lua
 
 ### 6. Improve Contour Shaping with Musical Context
 - Replace arbitrary 30% reversal with contour-aware logic

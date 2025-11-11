@@ -1,10 +1,15 @@
--- @description jtp gen: Melody Generator (Simple Dialog)
 -- @author James
--- @version 1.8
+-- @version 1.9
 -- @about
 --   # jtp gen: Melody Generator (Simple Dialog)
 --   Generates a MIDI melody with a simple built-in REAPER dialog (no ImGui required).
 --   Lets you set a few key parameters quickly and create a melody on the selected track.
+--
+--   NEW in v1.9: Goal-Oriented Tension and Release!
+--   - Phrases now aim toward musical targets (tonic/mediant/dominant)
+--   - Sections: intro (low tension), development (high tension), conclusion (resolve)
+--   - Movement biases toward targets and increases leaps when far
+--   - Final phrase resolves to tonic with a longer note
 --
 --   NEW in v1.8: Melodic Memory and Motif Repetition!
 --   - Phrase memory buffer stores last 3-5 phrases
@@ -1558,7 +1563,45 @@ else
         -- tension_level: 'low', 'medium', 'high'
 
         -- Generate a phrase with a specific contour type
-        local function generate_phrase(start_pitch, contour_type, phrase_length)
+        -- Map a simple tension factor
+        local function tension_factor(level)
+            if level == 'low' then return 0.3
+            elseif level == 'high' then return 0.8
+            else return 0.5 end -- 'medium'
+        end
+
+        -- Choose degree indices for targets (1=tonic, 3=mediant when available, 5=dominant when available)
+        local function degree_index_or_closest(degree)
+            if #scale_notes == 0 then return 1 end
+            return math.max(1, math.min(degree, #scale_notes))
+        end
+
+        -- Nudging helper: bias movement toward target
+        local function nudge_toward(current_idx, base_step, progress, target_idx, level, section)
+            local idx = current_idx
+            local step = base_step or 0
+            local dist = target_idx and (target_idx - idx) or 0
+            local absdist = math.abs(dist)
+            local dir = (dist > 0) and 1 or (dist < 0 and -1 or 0)
+
+            -- Probability to prefer moving toward target grows with progress and tension
+            local bias_p = (progress or 0) * tension_factor(level)
+            if math.random() < bias_p then
+                -- Move one step toward target
+                step = dir ~= 0 and dir or step
+            end
+
+            -- If far from target during development, allow an extra leap toward it
+            if section == 'development' and absdist >= 3 and math.random() < 0.35 then
+                step = step + dir
+            end
+
+            return clamp(idx + step, 1, #scale_notes)
+        end
+
+        -- Generate a phrase with a specific contour type, biased toward target where applicable
+        -- opts: {target_idx, tension_level='medium', section='intro'|'development'|'conclusion', is_final=false}
+        local function generate_phrase(start_pitch, contour_type, phrase_length, opts)
             phrase_length = phrase_length or math.random(4, 8)
             local pitches = {}
             local durations = {}
@@ -1566,6 +1609,11 @@ else
             -- Starting pitch
             local current_idx = find_index(scale_notes, start_pitch)
             table.insert(pitches, scale_notes[current_idx])
+
+            opts = opts or {}
+            local target_idx = opts.target_idx or degree_index_or_closest(1)
+            local tlevel = opts.tension_level or 'medium'
+            local section = opts.section or 'intro'
 
             -- Generate contour based on type
             if contour_type == 'arch' then
@@ -1575,11 +1623,13 @@ else
                     if i <= peak_point then
                         -- Ascending
                         local step = math.random(1, 2)
-                        current_idx = clamp(current_idx + step, 1, #scale_notes)
+                        local progress = (i - 1) / (phrase_length - 1)
+                        current_idx = nudge_toward(current_idx, step, progress, target_idx, tlevel, section)
                     else
                         -- Descending
-                        local step = math.random(1, 2)
-                        current_idx = clamp(current_idx - step, 1, #scale_notes)
+                        local step = -math.random(1, 2)
+                        local progress = (i - 1) / (phrase_length - 1)
+                        current_idx = nudge_toward(current_idx, step, progress, target_idx, tlevel, section)
                     end
                     table.insert(pitches, scale_notes[current_idx])
                 end
@@ -1589,16 +1639,18 @@ else
                 for i = 2, phrase_length do
                     local step = math.random(1, 2)
                     if math.random() < 0.2 then step = -1 end -- occasional drop for interest
-                    current_idx = clamp(current_idx + step, 1, #scale_notes)
+                    local progress = (i - 1) / (phrase_length - 1)
+                    current_idx = nudge_toward(current_idx, step, progress, target_idx, tlevel, section)
                     table.insert(pitches, scale_notes[current_idx])
                 end
 
             elseif contour_type == 'descending' then
                 -- Gradual descent
                 for i = 2, phrase_length do
-                    local step = math.random(1, 2)
-                    if math.random() < 0.2 then step = -1 end -- occasional rise for interest
-                    current_idx = clamp(current_idx - step, 1, #scale_notes)
+                    local step = -math.random(1, 2)
+                    if math.random() < 0.2 then step = 1 end -- occasional rise for interest
+                    local progress = (i - 1) / (phrase_length - 1)
+                    current_idx = nudge_toward(current_idx, step, progress, target_idx, tlevel, section)
                     table.insert(pitches, scale_notes[current_idx])
                 end
 
@@ -1608,12 +1660,14 @@ else
                 for i = 2, phrase_length do
                     if i <= valley_point then
                         -- Descending
-                        local step = math.random(1, 2)
-                        current_idx = clamp(current_idx - step, 1, #scale_notes)
+                        local step = -math.random(1, 2)
+                        local progress = (i - 1) / (phrase_length - 1)
+                        current_idx = nudge_toward(current_idx, step, progress, target_idx, tlevel, section)
                     else
                         -- Ascending
                         local step = math.random(1, 2)
-                        current_idx = clamp(current_idx + step, 1, #scale_notes)
+                        local progress = (i - 1) / (phrase_length - 1)
+                        current_idx = nudge_toward(current_idx, step, progress, target_idx, tlevel, section)
                     end
                     table.insert(pitches, scale_notes[current_idx])
                 end
@@ -1623,7 +1677,8 @@ else
                 local direction = 1
                 for i = 2, phrase_length do
                     local step = math.random(1, 2) * direction
-                    current_idx = clamp(current_idx + step, 1, #scale_notes)
+                    local progress = (i - 1) / (phrase_length - 1)
+                    current_idx = nudge_toward(current_idx, step, progress, target_idx, tlevel, section)
                     table.insert(pitches, scale_notes[current_idx])
                     -- Change direction occasionally
                     if math.random() < 0.4 then
@@ -1638,11 +1693,19 @@ else
                 table.insert(durations, dur)
             end
 
+            -- If this is the final phrase in the conclusion, force resolution to tonic and lengthen ending
+            if opts.is_final and section == 'conclusion' then
+                pitches[#pitches] = scale_notes[1] -- tonic
+                if durations[#durations] < half_note then
+                    durations[#durations] = half_note
+                end
+            end
+
             return {
                 pitches = pitches,
                 durations = durations,
                 contour_type = contour_type,
-                tension_level = 'medium', -- Default, can be adjusted
+                tension_level = tlevel, -- carry tension level
                 length = #pitches
             }
         end
@@ -1760,9 +1823,34 @@ else
 
             log('Generating ', NUM_PHRASES, ' phrases for channel ', channel, ' (motif repeat chance: ', motif_repeat_chance, '%)')
 
+            -- Sectioning: intro (25%), development (50%), conclusion (remainder)
+            local intro_ct = math.max(1, math.floor(NUM_PHRASES * 0.25))
+            local dev_ct = math.max(1, math.floor(NUM_PHRASES * 0.5))
+            if intro_ct + dev_ct > NUM_PHRASES - 1 then
+                dev_ct = math.max(1, NUM_PHRASES - intro_ct - 1)
+            end
+            local concl_ct = math.max(1, NUM_PHRASES - intro_ct - dev_ct)
+
+            local function section_of(n)
+                if n <= intro_ct then return 'intro'
+                elseif n <= intro_ct + dev_ct then return 'development'
+                else return 'conclusion' end
+            end
+
+            -- Targets by section
+            local DEG_TONIC = 1
+            local DEG_MEDIANT = degree_index_or_closest(3)
+            local DEG_DOMINANT = degree_index_or_closest(5)
+
             -- Generate phrases one by one
             for phrase_num = 1, NUM_PHRASES do
                 local phrase = nil
+                local section = section_of(phrase_num)
+                local is_final = (phrase_num == NUM_PHRASES)
+                local tlevel = (section == 'intro' and 'low') or (section == 'development' and 'high') or 'medium'
+                local target_idx = (section == 'intro' and (math.random() < 0.5 and DEG_TONIC or DEG_MEDIANT))
+                                    or (section == 'development' and DEG_DOMINANT)
+                                    or DEG_TONIC -- conclusion prefers tonic
 
                 -- Check if we should repeat a motif from memory
                 if #phrase_memory > 0 and math.random(100) <= motif_repeat_chance then
@@ -1798,7 +1886,12 @@ else
 
                     -- Generate the phrase
                     local phrase_length = math.random(4, 8)
-                    phrase = generate_phrase(start_pitch, contour_type, phrase_length)
+                    phrase = generate_phrase(start_pitch, contour_type, phrase_length, {
+                        target_idx = target_idx,
+                        tension_level = tlevel,
+                        section = section,
+                        is_final = is_final
+                    })
 
                     log('  Phrase ', phrase_num, ': ', contour_type, ', length=', phrase.length)
                 end
@@ -1809,6 +1902,9 @@ else
                     local duration = phrase.durations[i]
                     local velocity = vel_for_dur(duration)
                     local note_end = note_start + duration
+
+                    -- Clamp to item end to avoid overflow
+                    if note_end > end_time then note_end = end_time end
 
                     reaper.MIDI_InsertNote(
                         take, false, false,
@@ -1852,6 +1948,18 @@ else
                         reaper.MIDI_DeleteNote(take, i)
                         deleted = deleted + 1
                     end
+                end
+            end
+
+            -- Ensure final resolution note is tonic for this channel
+            local _, ncnt = reaper.MIDI_CountEvts(take)
+            for i = ncnt - 1, 0, -1 do
+                local ok, sel, muted, startppq, endppq, chan, pitch, vel = reaper.MIDI_GetNote(take, i)
+                if ok and chan == channel then
+                    if pitch ~= scale_notes[1] then
+                        reaper.MIDI_SetNote(take, i, sel, muted, startppq, endppq, chan, scale_notes[1], vel, false)
+                    end
+                    break
                 end
             end
         end

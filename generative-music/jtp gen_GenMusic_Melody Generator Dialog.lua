@@ -1,12 +1,26 @@
 -- @description jtp gen: Melody Generator (Simple Dialog)
 -- @author James
--- @version 1.6
+-- @version 1.8
 -- @about
 --   # jtp gen: Melody Generator (Simple Dialog)
 --   Generates a MIDI melody with a simple built-in REAPER dialog (no ImGui required).
 --   Lets you set a few key parameters quickly and create a melody on the selected track.
 --
---   NEW in v1.6: Rhythmic Guitar Mode!
+--   NEW in v1.8: Melodic Memory and Motif Repetition!
+--   - Phrase memory buffer stores last 3-5 phrases
+--   - Motif repetition chance parameter (30-50% default)
+--   - Retrieves and varies previous phrases with transposition
+--   - Creates recognizable melodic themes and development
+--   - Augmentation/diminution for rhythmic variation
+--
+--   v1.7: Phrase-Based Structure!
+--   - Replaced note-by-note generation with phrase-based system
+--   - Each phrase has 4-8 notes with coherent contour shapes
+--   - Five contour types: arch, ascending, descending, valley, wave
+--   - Intelligent variation: next phrase contrasts with previous
+--   - Creates more musical, structured melodies with clear phrases
+--
+--   v1.6: Rhythmic Guitar Mode!
 --   - Adapted from adaptive drum generator
 --   - Uses drum-style rhythm/articulation patterns with guitar note choices
 --   - Features: bursts, double hits, focused riffs, rhythmic complexity
@@ -82,7 +96,10 @@ local defaults = {
     ca_mode = get_ext('ca_mode', '0') == '1', -- Cellular Automata mode (default disabled)
     poly_mode = get_ext('poly_mode', 'free'), -- Polyphony mode: 'free', 'harmonic', 'voice_leading'
     theory_weight = tonumber(get_ext('theory_weight', 0.5)), -- 0.0 = free, 1.0 = strict theory
-    rhythmic_guitar_mode = get_ext('rhythmic_guitar_mode', '0') == '1' -- Rhythmic guitar mode (default disabled)
+    rhythmic_guitar_mode = get_ext('rhythmic_guitar_mode', '0') == '1', -- Rhythmic guitar mode (default disabled)
+    motif_mode = get_ext('motif_mode', 'melodic'), -- 'melodic' or 'rhythmic'
+    repetition_allowance = tonumber(get_ext('repetition_allowance', 3)), -- 2-4 allowed repeats
+    motif_repeat_chance = tonumber(get_ext('motif_repeat_chance', 40)), -- 0-100% chance of repeating a previous phrase
 }
 
 -- Small curated scale list (intervals from root)
@@ -354,6 +371,7 @@ local ok
 local ret
 local fields
 local rhythmic_guitar_mode
+local motif_repeat_chance
 
 local mode_items = {"Auto (use last settings)", "Manual (configure all settings)"}
 local mode_choice = show_popup_menu(mode_items, 1)
@@ -556,7 +574,8 @@ captions = table.concat({
     'CA: Growth Rate (0.1-1.0)',
     'CA: Time Bias (0-1, 0.5=equal)',
     'Theory Weight (0=free 1=strict)',
-    'Rhythmic Guitar Mode (0=off 1=on)'
+    'Rhythmic Guitar Mode (0=off 1=on)',
+    'Motif Repeat Chance (0-100%)'
 }, ',')
 
 defaults_csv = table.concat({
@@ -570,10 +589,11 @@ defaults_csv = table.concat({
     '0.4',  -- Default growth rate
     '0.6',  -- Default time bias (prefers horizontal)
     tostring(theory_weight),
-    defaults.rhythmic_guitar_mode and '1' or '0'
+    defaults.rhythmic_guitar_mode and '1' or '0',
+    tostring(defaults.motif_repeat_chance)
 }, ',')
 
-ok, ret = reaper.GetUserInputs('jtp gen: Melody Generator - Parameters', 11, captions, defaults_csv)
+ok, ret = reaper.GetUserInputs('jtp gen: Melody Generator - Parameters', 12, captions, defaults_csv)
 if not ok then return end
 
 fields = {}
@@ -590,6 +610,7 @@ ca_growth_rate = tonumber(fields[8]) or 0.4
 ca_time_bias = tonumber(fields[9]) or 0.6
 theory_weight = tonumber(fields[10]) or theory_weight
 rhythmic_guitar_mode = (tonumber(fields[11]) or 0) == 1
+motif_repeat_chance = tonumber(fields[12]) or defaults.motif_repeat_chance
 
 -- Sanity checks
 measures = clamp(math.floor(measures + 0.5), 1, 128)
@@ -602,6 +623,7 @@ num_voices = clamp(math.floor(num_voices + 0.5), 1, 16)
 ca_growth_rate = clamp(ca_growth_rate, 0.1, 1.0)
 ca_time_bias = clamp(ca_time_bias, 0.0, 1.0)
 theory_weight = clamp(theory_weight, 0.0, 1.0)
+motif_repeat_chance = clamp(motif_repeat_chance, 0, 100)
 
 -- Resolve scale
 if scale_name == 'random' or not scales[scale_name] then
@@ -624,6 +646,7 @@ set_ext('ca_mode', ca_mode and '1' or '0')
 set_ext('poly_mode', poly_mode)
 set_ext('theory_weight', theory_weight)
 set_ext('rhythmic_guitar_mode', rhythmic_guitar_mode and '1' or '0')
+set_ext('motif_repeat_chance', motif_repeat_chance)
 
 -- =============================
 -- GENERATE_MELODY label for auto mode
@@ -647,6 +670,7 @@ if use_auto_mode then
     poly_mode = defaults.poly_mode
     theory_weight = defaults.theory_weight
     rhythmic_guitar_mode = defaults.rhythmic_guitar_mode
+    motif_repeat_chance = defaults.motif_repeat_chance
 
     -- Resolve scale
     if defaults.scale_name == 'random' or not scales[defaults.scale_name] then
@@ -1131,12 +1155,13 @@ local function vel_for_dur(dur)
 end
 
 -- Duration choices with weights (in seconds)
+-- Higher weight = more frequent. Adjust these to taste!
 local dur_weights = {
-    [sixteenth_note] = 0,   -- 16th
-    [eighth_note] = 30,     -- 8th
-    [quarter_note] = 20,    -- quarter
-    [half_note] = 15,       -- half
-    [whole_note] = 7,       -- whole (full measure)
+    [sixteenth_note] = 5,   -- 16th (occasional fast notes)
+    [eighth_note] = 5,     -- 8th (reduced from 30)
+    [quarter_note] = 30,    -- quarter (now most common)
+    [half_note] = 40,       -- half (increased)
+    [whole_note] = 10,      -- whole (increased)
 }
 
 local function pick_duration(prev)
@@ -1163,8 +1188,11 @@ local function find_index(t, v)
 end
 
 -- Simple motion logic constants
-local MAX_REPEATED = 0
-local NOTE_VARIETY = 0.99
+-- Motif development: dynamic repetition constraints
+local motif_mode = defaults.motif_mode -- 'melodic' or 'rhythmic'
+local repetition_allowance = clamp(defaults.repetition_allowance or 3, 2, 4)
+local MAX_REPEATED = repetition_allowance
+local NOTE_VARIETY = (motif_mode == 'rhythmic') and 0.85 or 0.99
 local BIG_JUMP_CHANCE = 0.1
 local BIG_JUMP_INTERVAL = 4
 
@@ -1521,49 +1549,292 @@ else
     if poly_mode == 'free' or num_voices == 1 then
         log('Free polyphony mode - independent voices')
 
-        -- Generate a single voice of melody
-        local function generate_voice(channel)
-            -- Note count and pruning for this voice
-            local NUM_NOTES = math.random(min_notes, max_notes)
-            local notes_to_keep = math.random(min_keep, max_keep)
+        -- =============================
+        -- Phrase-Based Generation System (Step 2)
+        -- =============================
 
-            -- Walking motion logic
-            local repeated = 0
-            local direction = (math.random(2) == 1) and 1 or -1
+        -- Phrase structure: {pitches, durations, contour_type, tension_level}
+        -- contour_type: 'arch', 'ascending', 'descending', 'valley', 'wave'
+        -- tension_level: 'low', 'medium', 'high'
 
-            local function next_note(prev_note, prev_dur)
-                local move = 0
-                if repeated >= MAX_REPEATED or math.random() < NOTE_VARIETY then
-                    move = direction
-                    if math.random() > 0.7 then move = -move end
-                    repeated = 0
-                else
-                    if math.random() < BIG_JUMP_CHANCE then
-                        move = (math.random(2) == 1 and -1 or 1) * math.random(1, BIG_JUMP_INTERVAL)
-                        repeated = 0
+        -- Generate a phrase with a specific contour type
+        local function generate_phrase(start_pitch, contour_type, phrase_length)
+            phrase_length = phrase_length or math.random(4, 8)
+            local pitches = {}
+            local durations = {}
+
+            -- Starting pitch
+            local current_idx = find_index(scale_notes, start_pitch)
+            table.insert(pitches, scale_notes[current_idx])
+
+            -- Generate contour based on type
+            if contour_type == 'arch' then
+                -- Ascend for first half, descend for second half
+                local peak_point = math.floor(phrase_length / 2)
+                for i = 2, phrase_length do
+                    if i <= peak_point then
+                        -- Ascending
+                        local step = math.random(1, 2)
+                        current_idx = clamp(current_idx + step, 1, #scale_notes)
+                    else
+                        -- Descending
+                        local step = math.random(1, 2)
+                        current_idx = clamp(current_idx - step, 1, #scale_notes)
+                    end
+                    table.insert(pitches, scale_notes[current_idx])
+                end
+
+            elseif contour_type == 'ascending' then
+                -- Gradual climb
+                for i = 2, phrase_length do
+                    local step = math.random(1, 2)
+                    if math.random() < 0.2 then step = -1 end -- occasional drop for interest
+                    current_idx = clamp(current_idx + step, 1, #scale_notes)
+                    table.insert(pitches, scale_notes[current_idx])
+                end
+
+            elseif contour_type == 'descending' then
+                -- Gradual descent
+                for i = 2, phrase_length do
+                    local step = math.random(1, 2)
+                    if math.random() < 0.2 then step = -1 end -- occasional rise for interest
+                    current_idx = clamp(current_idx - step, 1, #scale_notes)
+                    table.insert(pitches, scale_notes[current_idx])
+                end
+
+            elseif contour_type == 'valley' then
+                -- Descend first, then ascend (inverse arch)
+                local valley_point = math.floor(phrase_length / 2)
+                for i = 2, phrase_length do
+                    if i <= valley_point then
+                        -- Descending
+                        local step = math.random(1, 2)
+                        current_idx = clamp(current_idx - step, 1, #scale_notes)
+                    else
+                        -- Ascending
+                        local step = math.random(1, 2)
+                        current_idx = clamp(current_idx + step, 1, #scale_notes)
+                    end
+                    table.insert(pitches, scale_notes[current_idx])
+                end
+
+            elseif contour_type == 'wave' then
+                -- Oscillating up and down
+                local direction = 1
+                for i = 2, phrase_length do
+                    local step = math.random(1, 2) * direction
+                    current_idx = clamp(current_idx + step, 1, #scale_notes)
+                    table.insert(pitches, scale_notes[current_idx])
+                    -- Change direction occasionally
+                    if math.random() < 0.4 then
+                        direction = -direction
                     end
                 end
-                local idx = find_index(scale_notes, prev_note)
-                local new_idx = clamp(idx + move, 1, #scale_notes)
-                return scale_notes[new_idx]
             end
 
-            -- Insert first note
-            local prev_note = scale_notes[math.random(1, #scale_notes)]
-            local prev_dur = pick_duration(quarter_note)
+            -- Generate durations for the phrase
+            for i = 1, phrase_length do
+                local dur = pick_duration(quarter_note)
+                table.insert(durations, dur)
+            end
+
+            return {
+                pitches = pitches,
+                durations = durations,
+                contour_type = contour_type,
+                tension_level = 'medium', -- Default, can be adjusted
+                length = #pitches
+            }
+        end
+
+        -- Determine contour variation based on previous phrase
+        local function get_next_contour_type(prev_contour)
+            local contour_types = {'arch', 'ascending', 'descending', 'valley', 'wave'}
+
+            if not prev_contour then
+                -- First phrase, choose randomly
+                return contour_types[math.random(1, #contour_types)]
+            end
+
+            -- Create contrast: if previous was ascending, prefer descending or arch
+            local contrast_map = {
+                ascending = {'descending', 'arch', 'valley'},
+                descending = {'ascending', 'arch', 'valley'},
+                arch = {'valley', 'wave', 'ascending'},
+                valley = {'arch', 'wave', 'descending'},
+                wave = {'arch', 'ascending', 'descending'}
+            }
+
+            local candidates = contrast_map[prev_contour] or contour_types
+            return candidates[math.random(1, #candidates)]
+        end
+
+        -- Transpose a phrase by a number of scale degrees
+        local function transpose_phrase(phrase, scale_degrees)
+            local transposed = {
+                pitches = {},
+                durations = {},
+                contour_type = phrase.contour_type,
+                tension_level = phrase.tension_level,
+                length = phrase.length
+            }
+
+            -- Copy durations unchanged
+            for i = 1, #phrase.durations do
+                transposed.durations[i] = phrase.durations[i]
+            end
+
+            -- Transpose pitches by scale degrees
+            for i = 1, #phrase.pitches do
+                local original_pitch = phrase.pitches[i]
+                local original_idx = find_index(scale_notes, original_pitch)
+                local new_idx = clamp(original_idx + scale_degrees, 1, #scale_notes)
+                transposed.pitches[i] = scale_notes[new_idx]
+            end
+
+            return transposed
+        end
+
+        -- Apply rhythmic augmentation (longer durations) or diminution (shorter)
+        local function vary_rhythm(phrase, factor)
+            local varied = {
+                pitches = {},
+                durations = {},
+                contour_type = phrase.contour_type,
+                tension_level = phrase.tension_level,
+                length = phrase.length
+            }
+
+            -- Copy pitches unchanged
+            for i = 1, #phrase.pitches do
+                varied.pitches[i] = phrase.pitches[i]
+            end
+
+            -- Scale durations by factor (0.5 = diminution, 2.0 = augmentation)
+            for i = 1, #phrase.durations do
+                varied.durations[i] = phrase.durations[i] * factor
+            end
+
+            return varied
+        end
+
+        -- Retrieve and vary a phrase from memory
+        local function retrieve_motif(phrase_memory)
+            if #phrase_memory == 0 then return nil end
+
+            -- Choose a random phrase from memory
+            local source_phrase = phrase_memory[math.random(1, #phrase_memory)]
+
+            -- Decide variation type
+            local variation_type = math.random(1, 3)
+
+            if variation_type == 1 then
+                -- Transpose by 2-5 scale degrees (up or down)
+                local transpose_amount = math.random(2, 5) * (math.random(2) == 1 and 1 or -1)
+                log('  Retrieving motif with transposition: ', transpose_amount, ' degrees')
+                return transpose_phrase(source_phrase, transpose_amount)
+            elseif variation_type == 2 then
+                -- Rhythmic augmentation (longer notes)
+                log('  Retrieving motif with augmentation')
+                return vary_rhythm(source_phrase, 1.5)
+            else
+                -- Rhythmic diminution (shorter notes)
+                log('  Retrieving motif with diminution')
+                return vary_rhythm(source_phrase, 0.75)
+            end
+        end
+
+        -- Generate a single voice of melody using phrases
+        local function generate_voice(channel)
+            -- Phrase count and pruning for this voice
+            local NUM_PHRASES = math.random(tonumber(min_notes) or 2, tonumber(max_notes) or 5)
+            local notes_to_keep = math.random(tonumber(min_keep) or 12, tonumber(max_keep) or 24)
+
+            -- Phrase memory buffer (stores last 3-5 phrases)
+            local phrase_memory = {}
+            local max_memory_size = math.random(3, 5)
+
+            -- Track phrase memory for variation
+            local prev_contour = nil
             local note_start = start_time
-            reaper.MIDI_InsertNote(take, false, false, timeToPPQ(note_start), timeToPPQ(note_start + prev_dur), channel, prev_note, vel_for_dur(prev_dur), false)
 
-            local note_end = note_start + prev_dur
-            for i = 2, NUM_NOTES do
-                prev_note = next_note(prev_note, prev_dur)
-                prev_dur = pick_duration(prev_dur)
-                note_start = note_end
-                note_end = note_start + prev_dur
-                reaper.MIDI_InsertNote(take, false, false, timeToPPQ(note_start), timeToPPQ(note_end), channel, prev_note, vel_for_dur(prev_dur), false)
+            log('Generating ', NUM_PHRASES, ' phrases for channel ', channel, ' (motif repeat chance: ', motif_repeat_chance, '%)')
+
+            -- Generate phrases one by one
+            for phrase_num = 1, NUM_PHRASES do
+                local phrase = nil
+
+                -- Check if we should repeat a motif from memory
+                if #phrase_memory > 0 and math.random(100) <= motif_repeat_chance then
+                    -- Retrieve and vary a previous phrase
+                    phrase = retrieve_motif(phrase_memory)
+                    log('  Phrase ', phrase_num, ': MOTIF REPETITION (varied from memory)')
+                end
+
+                -- If no motif repetition, generate new phrase
+                if not phrase then
+                    -- Determine contour type based on previous phrase
+                    local contour_type = get_next_contour_type(prev_contour)
+
+                    -- Choose starting pitch
+                    local start_pitch
+                    if phrase_num == 1 then
+                        -- First phrase: random starting note
+                        start_pitch = scale_notes[math.random(1, #scale_notes)]
+                    else
+                        -- Subsequent phrases: end near where we left off
+                        -- Get last inserted note for this channel
+                        local last_pitch = scale_notes[math.random(1, #scale_notes)] -- fallback
+                        local _, note_count = reaper.MIDI_CountEvts(take)
+                        for i = note_count - 1, 0, -1 do
+                            local _, _, _, _, _, chan, pitch = reaper.MIDI_GetNote(take, i)
+                            if chan == channel then
+                                last_pitch = pitch
+                                break
+                            end
+                        end
+                        start_pitch = last_pitch
+                    end
+
+                    -- Generate the phrase
+                    local phrase_length = math.random(4, 8)
+                    phrase = generate_phrase(start_pitch, contour_type, phrase_length)
+
+                    log('  Phrase ', phrase_num, ': ', contour_type, ', length=', phrase.length)
+                end
+
+                -- Insert all notes from the phrase
+                for i = 1, phrase.length do
+                    local pitch = phrase.pitches[i]
+                    local duration = phrase.durations[i]
+                    local velocity = vel_for_dur(duration)
+                    local note_end = note_start + duration
+
+                    reaper.MIDI_InsertNote(
+                        take, false, false,
+                        timeToPPQ(note_start),
+                        timeToPPQ(note_end),
+                        channel,
+                        pitch,
+                        velocity,
+                        false
+                    )
+
+                    note_start = note_end
+                end
+
+                -- Add phrase to memory buffer
+                table.insert(phrase_memory, phrase)
+                -- Keep memory buffer size limited
+                if #phrase_memory > max_memory_size then
+                    table.remove(phrase_memory, 1) -- Remove oldest phrase
+                end
+
+                -- Store this phrase's characteristics for next iteration
+                prev_contour = phrase.contour_type
             end
 
-            -- Prune excess notes for this voice
+            -- Prune excess notes for this voice if needed
             local voice_note_count = 0
             local _, total_cnt = reaper.MIDI_CountEvts(take)
             for i = 0, total_cnt - 1 do
@@ -1572,6 +1843,7 @@ else
             end
 
             if voice_note_count > notes_to_keep then
+                log('  Pruning from ', voice_note_count, ' to ', notes_to_keep, ' notes')
                 local deleted = 0
                 for i = total_cnt - 1, 0, -1 do
                     if deleted >= (voice_note_count - notes_to_keep) then break end
@@ -1595,7 +1867,7 @@ else
     elseif poly_mode == 'harmonic' then
         log('Harmonic polyphony mode - chord progression')
 
-        local NUM_CHORDS = math.random(min_notes, max_notes)
+    local NUM_CHORDS = math.random(tonumber(min_notes) or 3, tonumber(max_notes) or 7)
         local chord_types = {'triad', 'seventh', 'sus4'}
 
         local prev_chord_pitches = {}
@@ -1633,7 +1905,7 @@ else
     elseif poly_mode == 'voice_leading' then
         log('Voice leading polyphony mode - counterpoint with theory weight: ', theory_weight)
 
-        local NUM_NOTES = math.random(min_notes, max_notes)
+    local NUM_NOTES = math.random(tonumber(min_notes) or 3, tonumber(max_notes) or 7)
 
         -- Track state for all voices
         local voice_states = {}
@@ -1748,7 +2020,7 @@ else
         end
 
         -- Prune if needed
-        local notes_to_keep = math.random(min_keep, max_keep)
+    local notes_to_keep = math.random(tonumber(min_keep) or 12, tonumber(max_keep) or 24)
         local _, total_cnt = reaper.MIDI_CountEvts(take)
         if total_cnt > notes_to_keep then
             local deleted = 0

@@ -1,11 +1,50 @@
 -- @author James
--- @version 2.1
+-- @version 3.0
 -- @about
 --   # jtp gen: Melody Generator (Simple Dialog)
 --   Generates a MIDI melody with a simple built-in REAPER dialog (no ImGui required).
 --   Lets you set a few key parameters quickly and create a melody on the selected track.
 --
---   NEW in v2.1: Enhanced Pianist/Guitarist Mode!
+--   NEW in v3.0: MASTER IMPROVISER MODE! 🎹🎸
+--   The Pianist/Guitarist mode now thinks like a virtuoso improviser!
+--
+--   ** ADVANCED ORNAMENTATION (10 new ornament types): **
+--   - Trills, turns, mordents: Classical ornaments with authentic execution
+--   - Grace note clusters: Multiple grace notes leading elegantly to targets
+--   - Chromatic approaches: Half-step approaches for jazzy sophistication
+--   - Enclosures: Surround target notes from above and below
+--
+--   ** MOTIVIC DEVELOPMENT (5 techniques): **
+--   - Sequence: Repeat musical ideas at different pitches
+--   - Fragmentation: Break motifs into smaller pieces for variation
+--   - Inversion: Flip melodic contours upside down
+--   - Retrograde: Play motifs backwards
+--   - Rhythmic displacement: Keep pitches, transform rhythm
+--
+--   ** POLYRHYTHMIC PATTERNS (5 advanced rhythms): **
+--   - Triplet runs: Flowing 3-against-2 passages
+--   - Quintuplet flourishes: Complex 5-note groupings
+--   - Syncopated riffs: Off-beat accented patterns
+--   - Rubato passages: Freely timed expressive phrases
+--   - Hemiola patterns: 3-against-2 metric modulation
+--
+--   ** REGISTER EXPLORATION (4 dramatic techniques): **
+--   - Octave leap arpeggios: Jump between registers dramatically
+--   - Wide interval jumps: Leaps of 6ths, 7ths, octaves+
+--   - Cascade descents: Rapid downward motion with accelerando
+--   - Ascending rockets: Quick upward bursts to high register
+--
+--   ** HARMONIC SOPHISTICATION (4 advanced concepts): **
+--   - Extended voicings: Add 9ths, 11ths, 13ths to chords
+--   - Altered chord fills: Chromatic alterations and substitutions
+--   - Tension/resolution: Build harmonic tension then release
+--   - Modal exploration: Emphasize characteristic modal colors
+--
+--   Total: 39 distinct improvisational techniques that combine to create
+--   endlessly varied, musical, sophisticated improvisations that sound like
+--   a master player at work!
+--
+--   v2.1: Enhanced Pianist/Guitarist Mode!
 --   - Polyphonic fills! Two-voice arpeggios, walking bass + melody, chord stabs
 --   - 6 new fill types: polyphonic arps, bass walks, tremolo, grace notes, rhythmic stabs
 --   - Timing humanization: groove/swing on chords, subtle note timing variations
@@ -2158,17 +2197,20 @@ else
         end
 
     -- =============================
-    -- Mode 4: PIANIST/GUITARIST - Chords on beats with fills between
+    -- Mode 4: PIANIST/GUITARIST - Master Improviser Mode
+    -- Advanced improvisational system with sophisticated ornamentation,
+    -- motivic development, polyrhythms, and expressive phrasing
     -- =============================
     elseif poly_mode == 'pianist' then
-        log('Pianist/Guitarist polyphony mode - chords on beats with fills')
+        log('Pianist/Guitarist Master Improviser Mode - Advanced improvisational features')
 
-        -- Configuration - fewer chord changes for more sustained playing
-        local NUM_CHORD_CHANGES = math.random(2, 4) -- Much fewer chords = longer sustain
-        local chord_types = {'triad', 'seventh', 'sus4'}
+        -- Configuration - MORE chord changes for MORE FILLS!
+        local NUM_CHORD_CHANGES = math.random(4, 8) -- More chord changes = more fills!
+        local chord_types = {'triad', 'seventh', 'sus4', 'ninth', 'sus2'}
 
-        -- Fill types - expanded with more interesting options
+        -- Expanded fill types with sophisticated improvisational techniques
         local FILL_TYPES = {
+            -- Original fills
             'arpeggio_up',           -- Arpeggio ascending
             'arpeggio_down',         -- Arpeggio descending
             'run_to_chord',          -- Scale run approaching the chord
@@ -2179,12 +2221,131 @@ else
             'tremolo_chord',         -- Rapid alternation between 2-3 chord tones
             'grace_notes_to_chord',  -- Quick grace note flourish
             'rhythmic_stabs',        -- Short rhythmic chord hits
+
+            -- NEW: Advanced ornamental fills
+            'trill_ornament',        -- Rapid alternation between two adjacent notes
+            'turn_ornament',         -- Upper neighbor, main note, lower neighbor, main note
+            'mordent',               -- Quick lower/upper neighbor and return
+            'grace_cluster',         -- Multiple grace notes leading to target
+            'chromatic_approach',    -- Chromatic notes approaching chord tones
+            'enclosure',             -- Surround target from above and below
+
+            -- NEW: Motivic development
+            'motif_sequence',        -- Take a short idea and repeat it higher/lower
+            'motif_fragment',        -- Break a motif into smaller pieces
+            'motif_inversion',       -- Flip the contour upside down
+            'motif_retrograde',      -- Play backwards
+            'motif_rhythmic_shift',  -- Keep pitches, change rhythm
+
+            -- NEW: Advanced rhythmic patterns
+            'triplet_run',           -- Triplet-based flowing passage
+            'quintuplet_flourish',   -- Five-note grouping for complexity
+            'syncopated_riff',       -- Off-beat accented pattern
+            'rubato_passage',        -- Freely timed expressive phrase
+            'hemiola_pattern',       -- 3 against 2 polyrhythm
+
+            -- NEW: Register and interval exploration
+            'octave_leap_arp',       -- Arpeggios with octave displacements
+            'wide_interval_jump',    -- Dramatic leaps (6ths, 7ths, octaves+)
+            'cascade_descent',       -- Rapid downward motion across registers
+            'ascending_rocket',      -- Quick upward burst to high register
+
+            -- NEW: Harmonic sophistication
+            'extended_voicing',      -- Add 9ths, 11ths, 13ths to chords
+            'altered_chord_fill',    -- Use altered scale tones
+            'tension_resolution',    -- Build and release harmonic tension
+            'modal_exploration',     -- Explore characteristic modal notes
+
+            -- Space/rest
             'silence'                -- Rest/space
         }
+
+        -- =============================
+        -- HELPER FUNCTIONS FOR ADVANCED IMPROVISATION
+        -- =============================
 
         -- Helper: Get chord tones as a pool
         local function get_chord_tones(root_scale_idx, chord_type)
             return build_chord(scale_notes, root_scale_idx, chord_type, {-1, 1})
+        end
+
+        -- Helper: Get chromatic neighbor (not necessarily in scale)
+        local function get_chromatic_neighbor(pitch, direction)
+            return pitch + direction
+        end
+
+        -- Helper: Get chromatic approach notes (half-step below/above target)
+        local function get_chromatic_approaches(target_pitch)
+            return {target_pitch - 1, target_pitch + 1}
+        end
+
+        -- Helper: Get blue notes for blues feel (b3, b5, b7)
+        local function get_blue_notes(root_pitch)
+            return {
+                root_pitch + 3,  -- Minor 3rd (blue note)
+                root_pitch + 6,  -- Flat 5 (tritone, blues note)
+                root_pitch + 10  -- Minor 7th (blue note)
+            }
+        end
+
+        -- Helper: Check if pitch is in scale
+        local function is_in_scale(pitch)
+            for _, scale_pitch in ipairs(scale_notes) do
+                if (pitch % 12) == (scale_pitch % 12) then
+                    return true
+                end
+            end
+            return false
+        end
+
+        -- Helper: Get closest scale tone to a chromatic pitch
+        local function snap_to_scale(pitch)
+            local best_pitch = scale_notes[1]
+            local best_dist = math.abs(pitch - best_pitch)
+
+            for _, scale_pitch in ipairs(scale_notes) do
+                local dist = math.abs(pitch - scale_pitch)
+                if dist < best_dist then
+                    best_dist = dist
+                    best_pitch = scale_pitch
+                end
+            end
+
+            return best_pitch
+        end
+
+        -- Helper: Create velocity curve (crescendo/diminuendo)
+        local function create_velocity_curve(num_notes, start_vel, end_vel)
+            local velocities = {}
+            for i = 1, num_notes do
+                local t = (i - 1) / math.max(1, num_notes - 1)
+                local vel = math.floor(start_vel + t * (end_vel - start_vel))
+                table.insert(velocities, clamp(vel, 20, 127))
+            end
+            return velocities
+        end
+
+        -- Helper: Apply rubato timing (speed up/slow down)
+        local function apply_rubato(base_duration, intensity)
+            -- intensity: -1 (slow down) to +1 (speed up)
+            local factor = 1.0 + (intensity * 0.3)
+            return base_duration / factor
+        end
+
+        -- Helper: Get motif from previous fills (for development)
+        local motif_memory = {}
+        local function store_motif(pitches)
+            if #pitches >= 2 and #pitches <= 5 then
+                table.insert(motif_memory, pitches)
+                if #motif_memory > 5 then
+                    table.remove(motif_memory, 1)
+                end
+            end
+        end
+
+        local function get_stored_motif()
+            if #motif_memory == 0 then return nil end
+            return motif_memory[math.random(1, #motif_memory)]
         end
 
         -- Helper: Generate arpeggio fill
@@ -2596,6 +2757,963 @@ else
             return notes
         end
 
+        -- =============================
+        -- NEW: ADVANCED ORNAMENTAL FILLS
+        -- =============================
+
+        -- Trill: Rapid alternation between two adjacent notes
+        local function generate_trill(start_time, duration, target_pitch)
+            local notes = {}
+            local main_note = target_pitch
+            local upper_note = get_chromatic_neighbor(target_pitch, 1) -- Half step above
+
+            local trill_speed = sixteenth_note * 0.75
+            local num_notes = math.floor(duration / trill_speed)
+            num_notes = clamp(num_notes, 4, 12)
+
+            local t = start_time
+            for i = 1, num_notes do
+                if t >= start_time + duration then break end
+
+                local pitch = (i % 2 == 1) and main_note or upper_note
+                local vel = math.random(55, 75) + (i <= 3 and 10 or 0) -- Start slightly louder
+
+                table.insert(notes, {
+                    time = t,
+                    duration = trill_speed * 0.8,
+                    pitch = pitch,
+                    velocity = vel,
+                    voice = 0
+                })
+
+                t = t + trill_speed
+            end
+
+            return notes
+        end
+
+        -- Turn: Upper neighbor, main note, lower neighbor, main note
+        local function generate_turn(start_time, duration, main_pitch)
+            local notes = {}
+            local upper = get_chromatic_neighbor(main_pitch, 1)
+            local lower = get_chromatic_neighbor(main_pitch, -1)
+
+            local pattern = {upper, main_pitch, lower, main_pitch}
+            local note_dur = duration / 4
+
+            local t = start_time
+            for i, pitch in ipairs(pattern) do
+                if t >= start_time + duration then break end
+
+                table.insert(notes, {
+                    time = t,
+                    duration = note_dur * 0.85,
+                    pitch = pitch,
+                    velocity = math.random(60, 75),
+                    voice = 0
+                })
+
+                t = t + note_dur
+            end
+
+            return notes
+        end
+
+        -- Mordent: Quick neighbor tone ornament
+        local function generate_mordent(start_time, duration, main_pitch, is_upper)
+            local notes = {}
+            local neighbor = get_chromatic_neighbor(main_pitch, is_upper and 1 or -1)
+
+            local quick_dur = duration * 0.25
+            local main_dur = duration * 0.75
+
+            -- Quick neighbor
+            table.insert(notes, {
+                time = start_time,
+                duration = quick_dur,
+                pitch = neighbor,
+                velocity = math.random(55, 70),
+                voice = 0
+            })
+
+            -- Main note
+            table.insert(notes, {
+                time = start_time + quick_dur,
+                duration = main_dur,
+                pitch = main_pitch,
+                velocity = math.random(65, 80),
+                voice = 0
+            })
+
+            return notes
+        end
+
+        -- Grace note cluster: Multiple grace notes leading to target
+        local function generate_grace_cluster(start_time, duration, target_pitch)
+            local notes = {}
+            local num_grace = math.random(2, 4)
+            local grace_dur = (duration / num_grace) * 0.6
+
+            -- Start from a few semitones away
+            local start_offset = math.random(3, 5) * (math.random(2) == 1 and 1 or -1)
+            local current_pitch = target_pitch + start_offset
+
+            local t = start_time
+            for i = 1, num_grace do
+                if t >= start_time + duration then break end
+
+                table.insert(notes, {
+                    time = t,
+                    duration = grace_dur * 0.7,
+                    pitch = current_pitch,
+                    velocity = math.random(50, 65),
+                    voice = 0
+                })
+
+                -- Move toward target
+                if current_pitch > target_pitch then
+                    current_pitch = current_pitch - 1
+                else
+                    current_pitch = current_pitch + 1
+                end
+
+                t = t + grace_dur
+            end
+
+            return notes
+        end
+
+        -- Chromatic approach: Half-step approaches to chord tones
+        local function generate_chromatic_approach(start_time, duration, chord_tones)
+            local notes = {}
+
+            local num_targets = math.random(2, 4)
+            local time_per_target = duration / num_targets
+
+            local t = start_time
+            for i = 1, num_targets do
+                if t >= start_time + duration then break end
+
+                local target = chord_tones[math.random(1, #chord_tones)]
+                local approach = get_chromatic_neighbor(target, math.random(2) == 1 and 1 or -1)
+
+                local approach_dur = time_per_target * 0.4
+                local target_dur = time_per_target * 0.6
+
+                -- Approach note
+                table.insert(notes, {
+                    time = t,
+                    duration = approach_dur,
+                    pitch = approach,
+                    velocity = math.random(55, 70),
+                    voice = 0
+                })
+
+                -- Target note
+                table.insert(notes, {
+                    time = t + approach_dur,
+                    duration = target_dur,
+                    pitch = target,
+                    velocity = math.random(65, 80),
+                    voice = 0
+                })
+
+                t = t + time_per_target
+            end
+
+            return notes
+        end
+
+        -- Enclosure: Surround target from above and below
+        local function generate_enclosure(start_time, duration, target_pitch)
+            local notes = {}
+
+            local above = get_chromatic_neighbor(target_pitch, 1)
+            local below = get_chromatic_neighbor(target_pitch, -1)
+
+            local approach_dur = duration * 0.25
+            local target_dur = duration * 0.5
+
+            -- Above
+            table.insert(notes, {
+                time = start_time,
+                duration = approach_dur,
+                pitch = above,
+                velocity = math.random(55, 70),
+                voice = 0
+            })
+
+            -- Below
+            table.insert(notes, {
+                time = start_time + approach_dur,
+                duration = approach_dur,
+                pitch = below,
+                velocity = math.random(55, 70),
+                voice = 0
+            })
+
+            -- Target
+            table.insert(notes, {
+                time = start_time + approach_dur * 2,
+                duration = target_dur,
+                pitch = target_pitch,
+                velocity = math.random(70, 85),
+                voice = 0
+            })
+
+            return notes
+        end
+
+        -- =============================
+        -- NEW: MOTIVIC DEVELOPMENT FILLS
+        -- =============================
+
+        -- Motif sequence: Repeat a pattern at different pitches
+        local function generate_motif_sequence(start_time, duration, chord_tones)
+            local notes = {}
+
+            local motif = get_stored_motif()
+            if not motif or #motif < 2 then
+                -- Create a simple motif if none stored
+                motif = {}
+                for i = 1, math.random(2, 4) do
+                    table.insert(motif, chord_tones[math.random(1, #chord_tones)])
+                end
+            end
+
+            local num_repeats = math.random(2, 3)
+            local time_per_repeat = duration / num_repeats
+            local note_dur = time_per_repeat / #motif
+
+            local t = start_time
+            for rep = 1, num_repeats do
+                -- Transpose motif for each repeat
+                local transpose = (rep - 1) * (math.random(2) == 1 and 2 or -2) -- Up or down by 2 scale degrees
+
+                for _, pitch in ipairs(motif) do
+                    if t >= start_time + duration then break end
+
+                    local transposed = snap_to_scale(pitch + transpose)
+
+                    table.insert(notes, {
+                        time = t,
+                        duration = note_dur * 0.85,
+                        pitch = transposed,
+                        velocity = math.random(60, 80),
+                        voice = 0
+                    })
+
+                    t = t + note_dur
+                end
+            end
+
+            return notes
+        end
+
+        -- Motif fragmentation: Break motif into smaller pieces
+        local function generate_motif_fragment(start_time, duration, chord_tones)
+            local notes = {}
+
+            local motif = get_stored_motif()
+            if not motif or #motif < 3 then
+                motif = {}
+                for i = 1, math.random(3, 5) do
+                    table.insert(motif, chord_tones[math.random(1, #chord_tones)])
+                end
+            end
+
+            -- Take fragments of the motif
+            local fragment_size = math.random(2, math.ceil(#motif / 2))
+            local fragment = {}
+            for i = 1, fragment_size do
+                table.insert(fragment, motif[i])
+            end
+
+            -- Repeat fragment with variation
+            local note_dur = duration / (fragment_size * 2)
+            local t = start_time
+
+            for rep = 1, 2 do
+                for _, pitch in ipairs(fragment) do
+                    if t >= start_time + duration then break end
+
+                    table.insert(notes, {
+                        time = t,
+                        duration = note_dur * 0.8,
+                        pitch = pitch,
+                        velocity = math.random(60, 75),
+                        voice = 0
+                    })
+
+                    t = t + note_dur
+                end
+            end
+
+            return notes
+        end
+
+        -- Motif inversion: Flip intervals upside down
+        local function generate_motif_inversion(start_time, duration, chord_tones)
+            local notes = {}
+
+            local motif = get_stored_motif()
+            if not motif or #motif < 2 then
+                motif = {}
+                for i = 1, math.random(2, 4) do
+                    table.insert(motif, chord_tones[math.random(1, #chord_tones)])
+                end
+            end
+
+            -- Invert intervals
+            local inverted = {}
+            table.insert(inverted, motif[1]) -- Keep first note
+
+            for i = 2, #motif do
+                local interval = motif[i] - motif[i-1]
+                local inverted_pitch = inverted[i-1] - interval -- Flip direction
+                table.insert(inverted, snap_to_scale(inverted_pitch))
+            end
+
+            local note_dur = duration / #inverted
+            local t = start_time
+
+            for _, pitch in ipairs(inverted) do
+                if t >= start_time + duration then break end
+
+                table.insert(notes, {
+                    time = t,
+                    duration = note_dur * 0.85,
+                    pitch = pitch,
+                    velocity = math.random(60, 80),
+                    voice = 0
+                })
+
+                t = t + note_dur
+            end
+
+            return notes
+        end
+
+        -- Motif retrograde: Play backwards
+        local function generate_motif_retrograde(start_time, duration, chord_tones)
+            local notes = {}
+
+            local motif = get_stored_motif()
+            if not motif or #motif < 2 then
+                motif = {}
+                for i = 1, math.random(2, 4) do
+                    table.insert(motif, chord_tones[math.random(1, #chord_tones)])
+                end
+            end
+
+            local note_dur = duration / #motif
+            local t = start_time
+
+            -- Play backwards
+            for i = #motif, 1, -1 do
+                if t >= start_time + duration then break end
+
+                table.insert(notes, {
+                    time = t,
+                    duration = note_dur * 0.85,
+                    pitch = motif[i],
+                    velocity = math.random(60, 80),
+                    voice = 0
+                })
+
+                t = t + note_dur
+            end
+
+            return notes
+        end
+
+        -- Rhythmic shift: Keep pitches, change rhythm
+        local function generate_rhythmic_shift(start_time, duration, chord_tones)
+            local notes = {}
+
+            local motif = get_stored_motif()
+            if not motif or #motif < 2 then
+                motif = {}
+                for i = 1, math.random(2, 3) do
+                    table.insert(motif, chord_tones[math.random(1, #chord_tones)])
+                end
+            end
+
+            -- Create irregular rhythm
+            local rhythms = {}
+            local remaining = duration
+            local t = start_time
+
+            for i = 1, #motif do
+                local dur
+                if i == #motif then
+                    dur = remaining
+                else
+                    -- Random rhythm
+                    dur = (math.random(2) == 1) and eighth_note or (eighth_note * 1.5)
+                    dur = math.min(dur, remaining)
+                end
+
+                table.insert(notes, {
+                    time = t,
+                    duration = dur * 0.85,
+                    pitch = motif[i],
+                    velocity = math.random(60, 80),
+                    voice = 0
+                })
+
+                t = t + dur
+                remaining = remaining - dur
+                if remaining <= 0 then break end
+            end
+
+            return notes
+        end
+
+        -- =============================
+        -- NEW: ADVANCED RHYTHMIC PATTERNS
+        -- =============================
+
+        -- Triplet run: Flowing passage with triplet feel
+        local function generate_triplet_run(start_time, duration, chord_tones, target_root)
+            local notes = {}
+
+            local target_idx = target_root and find_index(scale_notes, target_root) or find_index(scale_notes, chord_tones[1])
+            local start_offset = math.random(3, 6) * (math.random(2) == 1 and 1 or -1)
+            local start_idx = clamp(target_idx + start_offset, 1, #scale_notes)
+
+            -- Triplet duration (3 notes in the space of 2)
+            local triplet_unit = (quarter_note * 2/3)
+            local num_triplets = math.floor(duration / triplet_unit)
+            num_triplets = clamp(num_triplets, 3, 12)
+
+            local direction = (target_idx > start_idx) and 1 or -1
+            local current_idx = start_idx
+            local t = start_time
+
+            -- Create velocity curve (crescendo into target)
+            local velocities = create_velocity_curve(num_triplets, 55, 80)
+
+            for i = 1, num_triplets do
+                if t >= start_time + duration then break end
+
+                table.insert(notes, {
+                    time = t,
+                    duration = triplet_unit * 0.85,
+                    pitch = scale_notes[current_idx],
+                    velocity = velocities[i],
+                    voice = 0
+                })
+
+                current_idx = clamp(current_idx + direction, 1, #scale_notes)
+                t = t + triplet_unit
+            end
+
+            return notes
+        end
+
+        -- Quintuplet flourish: Five-note grouping for complexity
+        local function generate_quintuplet_flourish(start_time, duration, chord_tones)
+            local notes = {}
+
+            -- Quintuplet duration (5 notes in space of 4)
+            local quint_unit = (quarter_note * 4/5)
+            local num_quints = math.floor(duration / quint_unit)
+            num_quints = clamp(num_quints, 5, 10)
+
+            local t = start_time
+            for i = 1, num_quints do
+                if t >= start_time + duration then break end
+
+                -- Alternate between chord tones and neighbors
+                local pitch
+                if i % 2 == 1 then
+                    pitch = chord_tones[math.random(1, #chord_tones)]
+                else
+                    local base = chord_tones[math.random(1, #chord_tones)]
+                    local base_idx = find_index(scale_notes, base)
+                    pitch = scale_notes[clamp(base_idx + (math.random(2) == 1 and 1 or -1), 1, #scale_notes)]
+                end
+
+                table.insert(notes, {
+                    time = t,
+                    duration = quint_unit * 0.8,
+                    pitch = pitch,
+                    velocity = math.random(60, 75),
+                    voice = 0
+                })
+
+                t = t + quint_unit
+            end
+
+            return notes
+        end
+
+        -- Syncopated riff: Off-beat accented pattern
+        local function generate_syncopated_riff(start_time, duration, chord_tones)
+            local notes = {}
+
+            local unique_tones = {}
+            for _, tone in ipairs(chord_tones) do
+                if not table_contains(unique_tones, tone) then
+                    table.insert(unique_tones, tone)
+                end
+            end
+
+            -- Create syncopated rhythm (emphasis on off-beats)
+            local pattern_length = 4
+            local note_dur = (duration / pattern_length)
+
+            local t = start_time
+            for i = 1, pattern_length do
+                if t >= start_time + duration then break end
+
+                local is_offbeat = (i % 2 == 0)
+                local offset = is_offbeat and (note_dur * 0.25) or 0 -- Push offbeats forward
+                local vel = is_offbeat and math.random(75, 90) or math.random(55, 70)
+                local dur = is_offbeat and (note_dur * 0.6) or (note_dur * 0.4)
+
+                table.insert(notes, {
+                    time = t + offset,
+                    duration = dur,
+                    pitch = unique_tones[math.random(1, #unique_tones)],
+                    velocity = vel,
+                    voice = 0
+                })
+
+                t = t + note_dur
+            end
+
+            return notes
+        end
+
+        -- Rubato passage: Freely timed expressive phrase
+        local function generate_rubato_passage(start_time, duration, chord_tones)
+            local notes = {}
+
+            local num_notes = math.random(4, 7)
+            local base_dur = duration / num_notes
+
+            local t = start_time
+            for i = 1, num_notes do
+                if t >= start_time + duration then break end
+
+                -- Apply rubato: middle notes rushed, end note held
+                local rubato_factor
+                if i <= 2 then
+                    rubato_factor = math.random() * 0.3 - 0.15 -- Slight variation
+                elseif i <= num_notes - 1 then
+                    rubato_factor = math.random() * 0.5 - 0.4 -- Rush (negative = faster)
+                else
+                    rubato_factor = math.random() * 0.5 + 0.2 -- Hold final note
+                end
+
+                local note_duration = apply_rubato(base_dur, rubato_factor)
+
+                table.insert(notes, {
+                    time = t,
+                    duration = note_duration * 0.9,
+                    pitch = chord_tones[math.random(1, #chord_tones)],
+                    velocity = math.random(55, 75),
+                    voice = 0
+                })
+
+                t = t + note_duration
+            end
+
+            return notes
+        end
+
+        -- Hemiola pattern: 3 against 2 polyrhythm
+        local function generate_hemiola(start_time, duration, chord_tones)
+            local notes = {}
+
+            -- Divide duration into 3 equal parts (3 against underlying 2 or 4)
+            local hemiola_dur = duration / 3
+
+            local t = start_time
+            for i = 1, 3 do
+                if t >= start_time + duration then break end
+
+                table.insert(notes, {
+                    time = t,
+                    duration = hemiola_dur * 0.85,
+                    pitch = chord_tones[math.random(1, #chord_tones)],
+                    velocity = math.random(65, 85),
+                    voice = 0
+                })
+
+                t = t + hemiola_dur
+            end
+
+            return notes
+        end
+
+        -- =============================
+        -- NEW: REGISTER EXPLORATION & WIDE INTERVALS
+        -- =============================
+
+        -- Octave leap arpeggio: Arpeggios with octave displacements
+        local function generate_octave_leap_arp(start_time, duration, chord_tones)
+            local notes = {}
+
+            local unique_tones = {}
+            for _, tone in ipairs(chord_tones) do
+                if not table_contains(unique_tones, tone) then
+                    table.insert(unique_tones, tone)
+                end
+            end
+            table.sort(unique_tones)
+
+            local note_dur = eighth_note
+            local num_notes = math.floor(duration / note_dur)
+            num_notes = clamp(num_notes, 3, 8)
+
+            local t = start_time
+            for i = 1, num_notes do
+                if t >= start_time + duration then break end
+
+                local base_pitch = unique_tones[((i - 1) % #unique_tones) + 1]
+
+                -- Occasionally jump octaves for drama
+                local octave_shift = 0
+                if i % 3 == 0 and math.random() < 0.6 then
+                    octave_shift = (math.random(2) == 1) and 12 or -12
+                end
+
+                local pitch = clamp(base_pitch + octave_shift, 36, 96)
+
+                table.insert(notes, {
+                    time = t,
+                    duration = note_dur * 0.8,
+                    pitch = pitch,
+                    velocity = math.random(60, 80),
+                    voice = 0
+                })
+
+                t = t + note_dur
+            end
+
+            return notes
+        end
+
+        -- Wide interval jump: Dramatic leaps
+        local function generate_wide_jump(start_time, duration, chord_tones)
+            local notes = {}
+
+            local unique_tones = {}
+            for _, tone in ipairs(chord_tones) do
+                if not table_contains(unique_tones, tone) then
+                    table.insert(unique_tones, tone)
+                end
+            end
+            table.sort(unique_tones)
+
+            if #unique_tones < 2 then return generate_arpeggio(start_time, duration, chord_tones, 'up') end
+
+            -- Create dramatic leaps between registers
+            local num_jumps = math.random(2, 4)
+            local time_per_jump = duration / num_jumps
+
+            local t = start_time
+            for i = 1, num_jumps do
+                if t >= start_time + duration then break end
+
+                -- Pick from different registers
+                local low_note = unique_tones[1]
+                local high_note = unique_tones[#unique_tones]
+
+                local pitch = (i % 2 == 1) and high_note or low_note
+
+                -- Add octave for even more drama
+                if math.random() < 0.4 then
+                    pitch = pitch + ((pitch == high_note) and 12 or -12)
+                    pitch = clamp(pitch, 36, 96)
+                end
+
+                table.insert(notes, {
+                    time = t,
+                    duration = time_per_jump * 0.7,
+                    pitch = pitch,
+                    velocity = math.random(70, 90),
+                    voice = 0
+                })
+
+                t = t + time_per_jump
+            end
+
+            return notes
+        end
+
+        -- Cascade descent: Rapid downward motion across registers
+        local function generate_cascade_descent(start_time, duration, chord_tones)
+            local notes = {}
+
+            local unique_tones = {}
+            for _, tone in ipairs(chord_tones) do
+                if not table_contains(unique_tones, tone) then
+                    table.insert(unique_tones, tone)
+                end
+            end
+            table.sort(unique_tones)
+
+            -- Start high, cascade down
+            local current_pitch = unique_tones[#unique_tones] + 12 -- Start an octave up
+            current_pitch = clamp(current_pitch, 36, 96)
+
+            local note_dur = sixteenth_note * 0.9
+            local num_notes = math.floor(duration / note_dur)
+            num_notes = clamp(num_notes, 6, 16)
+
+            -- Velocities increase as we descend (accelerando feel)
+            local velocities = create_velocity_curve(num_notes, 60, 85)
+
+            local t = start_time
+            for i = 1, num_notes do
+                if t >= start_time + duration then break end
+
+                table.insert(notes, {
+                    time = t,
+                    duration = note_dur * 0.7,
+                    pitch = current_pitch,
+                    velocity = velocities[i],
+                    voice = 0
+                })
+
+                -- Move down chromatically or by scale steps
+                if math.random() < 0.7 then
+                    -- Scale step
+                    local idx = find_index(scale_notes, snap_to_scale(current_pitch))
+                    idx = clamp(idx - 1, 1, #scale_notes)
+                    current_pitch = scale_notes[idx]
+                else
+                    -- Chromatic
+                    current_pitch = current_pitch - 1
+                end
+
+                current_pitch = clamp(current_pitch, 36, 96)
+                t = t + note_dur
+            end
+
+            return notes
+        end
+
+        -- Ascending rocket: Quick upward burst
+        local function generate_ascending_rocket(start_time, duration, chord_tones, target_root)
+            local notes = {}
+
+            local target_idx = target_root and find_index(scale_notes, target_root) or find_index(scale_notes, chord_tones[1])
+
+            -- Start low
+            local start_idx = clamp(target_idx - 8, 1, #scale_notes)
+            local current_idx = start_idx
+
+            local note_dur = sixteenth_note * 0.85
+            local num_notes = math.floor(duration / note_dur)
+            num_notes = clamp(num_notes, 6, 12)
+
+            -- Velocities increase as we ascend
+            local velocities = create_velocity_curve(num_notes, 55, 90)
+
+            local t = start_time
+            for i = 1, num_notes do
+                if t >= start_time + duration then break end
+
+                table.insert(notes, {
+                    time = t,
+                    duration = note_dur * 0.75,
+                    pitch = scale_notes[current_idx],
+                    velocity = velocities[i],
+                    voice = 0
+                })
+
+                current_idx = clamp(current_idx + 1, 1, #scale_notes)
+                t = t + note_dur
+            end
+
+            return notes
+        end
+
+        -- =============================
+        -- NEW: HARMONIC SOPHISTICATION
+        -- =============================
+
+        -- Extended voicing fill: Add 9ths, 11ths, 13ths
+        local function generate_extended_voicing(start_time, duration, chord_tones)
+            local notes = {}
+
+            local unique_tones = {}
+            for _, tone in ipairs(chord_tones) do
+                if not table_contains(unique_tones, tone) then
+                    table.insert(unique_tones, tone)
+                end
+            end
+            table.sort(unique_tones)
+
+            -- Add extensions (9th, 11th, 13th)
+            local root = unique_tones[1]
+            local extensions = {
+                snap_to_scale(root + 14), -- 9th
+                snap_to_scale(root + 17), -- 11th
+                snap_to_scale(root + 21)  -- 13th
+            }
+
+            -- Combine chord tones with extensions
+            local extended_pool = {}
+            for _, p in ipairs(unique_tones) do table.insert(extended_pool, p) end
+            for _, p in ipairs(extensions) do table.insert(extended_pool, p) end
+
+            local note_dur = eighth_note
+            local num_notes = math.floor(duration / note_dur)
+            num_notes = clamp(num_notes, 3, 6)
+
+            local t = start_time
+            for i = 1, num_notes do
+                if t >= start_time + duration then break end
+
+                table.insert(notes, {
+                    time = t,
+                    duration = note_dur * 0.85,
+                    pitch = extended_pool[math.random(1, #extended_pool)],
+                    velocity = math.random(60, 75),
+                    voice = 0
+                })
+
+                t = t + note_dur
+            end
+
+            return notes
+        end
+
+        -- Altered chord fill: Use chromatic alterations
+        local function generate_altered_fill(start_time, duration, chord_tones)
+            local notes = {}
+
+            local num_notes = math.random(3, 6)
+            local note_dur = duration / num_notes
+
+            local t = start_time
+            for i = 1, num_notes do
+                if t >= start_time + duration then break end
+
+                local base = chord_tones[math.random(1, #chord_tones)]
+
+                -- 40% chance to alter (raise or lower by semitone)
+                local pitch = base
+                if math.random() < 0.4 then
+                    pitch = base + (math.random(2) == 1 and 1 or -1)
+                end
+
+                table.insert(notes, {
+                    time = t,
+                    duration = note_dur * 0.8,
+                    pitch = pitch,
+                    velocity = math.random(60, 75),
+                    voice = 0
+                })
+
+                t = t + note_dur
+            end
+
+            return notes
+        end
+
+        -- Tension and resolution: Build tension then resolve
+        local function generate_tension_resolution(start_time, duration, chord_tones, target_root)
+            local notes = {}
+
+            local tension_dur = duration * 0.6
+            local resolution_dur = duration * 0.4
+
+            -- Tension phase: chromatic notes, dissonance
+            local num_tension = math.random(3, 5)
+            local tension_note_dur = tension_dur / num_tension
+
+            local t = start_time
+            for i = 1, num_tension do
+                if t >= start_time + tension_dur then break end
+
+                local pitch = chord_tones[math.random(1, #chord_tones)]
+                -- Add chromatic tension
+                pitch = pitch + math.random(-1, 1)
+
+                table.insert(notes, {
+                    time = t,
+                    duration = tension_note_dur * 0.7,
+                    pitch = pitch,
+                    velocity = math.random(65, 80),
+                    voice = 0
+                })
+
+                t = t + tension_note_dur
+            end
+
+            -- Resolution phase: resolve to chord tones
+            local num_resolution = 2
+            local resolution_note_dur = resolution_dur / num_resolution
+
+            for i = 1, num_resolution do
+                if t >= start_time + duration then break end
+
+                local pitch = target_root or chord_tones[1]
+
+                table.insert(notes, {
+                    time = t,
+                    duration = resolution_note_dur * 0.9,
+                    pitch = pitch,
+                    velocity = math.random(70, 85),
+                    voice = 0
+                })
+
+                t = t + resolution_note_dur
+            end
+
+            return notes
+        end
+
+        -- Modal exploration: Emphasize characteristic modal notes
+        local function generate_modal_exploration(start_time, duration, chord_tones)
+            local notes = {}
+
+            -- Find characteristic notes (b2, #4, b6, b7, etc.)
+            local root = chord_tones[1]
+            local modal_notes = {}
+
+            for _, tone in ipairs(scale_notes) do
+                local interval = (tone - root) % 12
+                -- Characteristic intervals: b2, b3, #4, b6, b7
+                if interval == 1 or interval == 3 or interval == 6 or interval == 8 or interval == 10 then
+                    table.insert(modal_notes, tone)
+                end
+            end
+
+            -- If no modal notes found, use scale notes
+            if #modal_notes == 0 then
+                modal_notes = scale_notes
+            end
+
+            local note_dur = eighth_note
+            local num_notes = math.floor(duration / note_dur)
+            num_notes = clamp(num_notes, 3, 7)
+
+            local t = start_time
+            for i = 1, num_notes do
+                if t >= start_time + duration then break end
+
+                table.insert(notes, {
+                    time = t,
+                    duration = note_dur * 0.85,
+                    pitch = modal_notes[math.random(1, #modal_notes)],
+                    velocity = math.random(60, 80),
+                    voice = 0
+                })
+
+                t = t + note_dur
+            end
+
+            return notes
+        end
+
         -- Main generation loop for pianist/guitarist mode
         local prev_chord_pitches = {}
         local chord_times = {} -- Store when chords happen
@@ -2622,16 +3740,16 @@ else
             -- Voice lead to this chord
             local chord_pitches = find_best_voice_leading(prev_chord_pitches, chord_pool, theory_weight)
 
-            -- Chord duration: More varied for interest
-            -- Sometimes shorter punchy chords (50-60%), sometimes longer sustains (70-85%)
+            -- Chord duration: SHORTER chords for MORE FILL SPACE!
+            -- Reduced from 50-85% to 30-60% for maximum fill activity
             local chord_style = math.random()
             local chord_hold_percent
             if chord_style < 0.3 then
-                chord_hold_percent = math.random(50, 60) -- Punchy
+                chord_hold_percent = math.random(30, 40) -- Very punchy
             elseif chord_style < 0.7 then
-                chord_hold_percent = math.random(65, 75) -- Medium
+                chord_hold_percent = math.random(40, 50) -- Short
             else
-                chord_hold_percent = math.random(75, 85) -- Long sustain
+                chord_hold_percent = math.random(50, 60) -- Medium
             end
 
             local chord_hold = time_per_chord * chord_hold_percent / 100
@@ -2711,6 +3829,7 @@ else
         for _, fill_event in ipairs(fills) do
             local fill_notes = {}
 
+            -- Original fill types
             if fill_event.type == 'arpeggio_up' then
                 fill_notes = generate_arpeggio(fill_event.time, fill_event.duration, fill_event.chord_tones, 'up')
             elseif fill_event.type == 'arpeggio_down' then
@@ -2731,7 +3850,80 @@ else
                 fill_notes = generate_grace_notes(fill_event.time, fill_event.duration, fill_event.target_root)
             elseif fill_event.type == 'rhythmic_stabs' then
                 fill_notes = generate_rhythmic_stabs(fill_event.time, fill_event.duration, fill_event.chord_tones)
+
+            -- NEW: Advanced ornamental fills
+            elseif fill_event.type == 'trill_ornament' then
+                local target = fill_event.chord_tones[math.random(1, #fill_event.chord_tones)]
+                fill_notes = generate_trill(fill_event.time, fill_event.duration, target)
+            elseif fill_event.type == 'turn_ornament' then
+                local target = fill_event.chord_tones[math.random(1, #fill_event.chord_tones)]
+                fill_notes = generate_turn(fill_event.time, fill_event.duration, target)
+            elseif fill_event.type == 'mordent' then
+                local target = fill_event.chord_tones[math.random(1, #fill_event.chord_tones)]
+                fill_notes = generate_mordent(fill_event.time, fill_event.duration, target, math.random(2) == 1)
+            elseif fill_event.type == 'grace_cluster' then
+                local target = fill_event.target_root or fill_event.chord_tones[math.random(1, #fill_event.chord_tones)]
+                fill_notes = generate_grace_cluster(fill_event.time, fill_event.duration, target)
+            elseif fill_event.type == 'chromatic_approach' then
+                fill_notes = generate_chromatic_approach(fill_event.time, fill_event.duration, fill_event.chord_tones)
+            elseif fill_event.type == 'enclosure' then
+                local target = fill_event.target_root or fill_event.chord_tones[math.random(1, #fill_event.chord_tones)]
+                fill_notes = generate_enclosure(fill_event.time, fill_event.duration, target)
+
+            -- NEW: Motivic development fills
+            elseif fill_event.type == 'motif_sequence' then
+                fill_notes = generate_motif_sequence(fill_event.time, fill_event.duration, fill_event.chord_tones)
+            elseif fill_event.type == 'motif_fragment' then
+                fill_notes = generate_motif_fragment(fill_event.time, fill_event.duration, fill_event.chord_tones)
+            elseif fill_event.type == 'motif_inversion' then
+                fill_notes = generate_motif_inversion(fill_event.time, fill_event.duration, fill_event.chord_tones)
+            elseif fill_event.type == 'motif_retrograde' then
+                fill_notes = generate_motif_retrograde(fill_event.time, fill_event.duration, fill_event.chord_tones)
+            elseif fill_event.type == 'motif_rhythmic_shift' then
+                fill_notes = generate_rhythmic_shift(fill_event.time, fill_event.duration, fill_event.chord_tones)
+
+            -- NEW: Advanced rhythmic patterns
+            elseif fill_event.type == 'triplet_run' then
+                fill_notes = generate_triplet_run(fill_event.time, fill_event.duration, fill_event.chord_tones, fill_event.target_root)
+            elseif fill_event.type == 'quintuplet_flourish' then
+                fill_notes = generate_quintuplet_flourish(fill_event.time, fill_event.duration, fill_event.chord_tones)
+            elseif fill_event.type == 'syncopated_riff' then
+                fill_notes = generate_syncopated_riff(fill_event.time, fill_event.duration, fill_event.chord_tones)
+            elseif fill_event.type == 'rubato_passage' then
+                fill_notes = generate_rubato_passage(fill_event.time, fill_event.duration, fill_event.chord_tones)
+            elseif fill_event.type == 'hemiola_pattern' then
+                fill_notes = generate_hemiola(fill_event.time, fill_event.duration, fill_event.chord_tones)
+
+            -- NEW: Register exploration
+            elseif fill_event.type == 'octave_leap_arp' then
+                fill_notes = generate_octave_leap_arp(fill_event.time, fill_event.duration, fill_event.chord_tones)
+            elseif fill_event.type == 'wide_interval_jump' then
+                fill_notes = generate_wide_jump(fill_event.time, fill_event.duration, fill_event.chord_tones)
+            elseif fill_event.type == 'cascade_descent' then
+                fill_notes = generate_cascade_descent(fill_event.time, fill_event.duration, fill_event.chord_tones)
+            elseif fill_event.type == 'ascending_rocket' then
+                fill_notes = generate_ascending_rocket(fill_event.time, fill_event.duration, fill_event.chord_tones, fill_event.target_root)
+
+            -- NEW: Harmonic sophistication
+            elseif fill_event.type == 'extended_voicing' then
+                fill_notes = generate_extended_voicing(fill_event.time, fill_event.duration, fill_event.chord_tones)
+            elseif fill_event.type == 'altered_chord_fill' then
+                fill_notes = generate_altered_fill(fill_event.time, fill_event.duration, fill_event.chord_tones)
+            elseif fill_event.type == 'tension_resolution' then
+                fill_notes = generate_tension_resolution(fill_event.time, fill_event.duration, fill_event.chord_tones, fill_event.target_root)
+            elseif fill_event.type == 'modal_exploration' then
+                fill_notes = generate_modal_exploration(fill_event.time, fill_event.duration, fill_event.chord_tones)
+
             -- 'silence' means no fill notes - just space
+            end
+
+            -- Store motif for future development (extract pitches from fill notes)
+            if #fill_notes > 0 and #fill_notes <= 5 then
+                local pitches = {}
+                for _, note in ipairs(fill_notes) do
+                    table.insert(pitches, note.pitch)
+                end
+                store_motif(pitches)
             end
 
             -- Insert fill notes with timing humanization

@@ -2,7 +2,7 @@
 
 This plan outlines a modular, phased development strategy for the DWUMMER ReaScript, prioritizing the delivery of functional and testable code at the end of each stage.
 
-## Phase 0: Setup and Boilerplate (Foundation)
+## Phase 0: Setup and Boilerplate (Foundation) ✅ COMPLETE
 
 **Goal:** Establish the necessary project structure, ensure the script is runnable, and implement the core mechanism for guaranteeing reproducible results.
 
@@ -17,7 +17,7 @@ This plan outlines a modular, phased development strategy for the DWUMMER ReaScr
 
 ---
 
-## Phase 1: I/O Handler MVP (Core Functionality)
+## Phase 1: I/O Handler MVP (Core Functionality) ✅ COMPLETE
 
 **Goal:** Create a functional bridge between the script's logic and the REAPER timeline, allowing the script to autonomously create a new MIDI item and insert notes without user interaction in the MIDI Editor.
 

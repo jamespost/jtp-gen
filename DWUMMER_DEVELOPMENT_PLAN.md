@@ -60,6 +60,22 @@ This plan outlines a modular, phased development strategy for the DWUMMER ReaScr
 
 **Phase 3 Deliverable:** The script generates highly realistic, grooving drum patterns, featuring dynamic velocity, swing, subtle ghost notes, and a musically placed drum fill, making the output immediately production-ready.
 
+## Phase 4: Musical Intelligence & Expressive Performance
+
+**Goal:** Evolve DWUMMER from a pattern generator into a virtual drummer that composes musically engaging, context-aware drum parts, with deep attention to phrasing, dynamics, and interaction.
+
+| Task ID | Description | Specification Section | Key Concept/API |
+|---------|-------------|----------------------|-----------------|
+| 4.1 | Motif-Based Groove Development: Implement motif recognition and development, so grooves evolve with recurring rhythmic ideas, variations, and callbacks, mimicking real drummer phrasing. | New Section | Motif Engine |
+| 4.2 | Dynamic Phrasing & Section Awareness: Add logic for musical sections (verse, chorus, bridge, etc.), with automatic changes in groove density, dynamics, and fills to reflect song structure. | New Section | Section Mapper |
+| 4.3 | Call-and-Response & Interaction: Introduce call-and-response patterns between drum voices (e.g., snare/hat interplay, tom/snare fills), and between drums and other tracks (if possible via API). | New Section | Interaction Logic |
+| 4.4 | Expressive Ghost Note Placement: Use musical context (e.g., proximity to accents, phrase endings) to place ghost notes and embellishments, rather than random probability. | New Section | Contextual Ghosting |
+| 4.5 | Intelligent Fill Placement & Variation: Vary fill length, complexity, and placement based on musical tension, phrase length, and previous groove, avoiding repetitive or generic fills. | New Section | Fill Intelligence |
+| 4.6 | Adaptive Dynamics & Microtiming: Continuously adapt velocity and timing based on groove intensity, section, and motif, creating natural push/pull and dynamic swells. | New Section | Adaptive Dynamics |
+| 4.7 | Groove Surprise & "Mistake" Engine: Occasionally introduce subtle "mistakes" (e.g., dropped beat, extra ghost note, displaced accent) to emulate human unpredictability and keep patterns fresh. | New Section | Surprise Engine |
+
+**Phase 4 Deliverable:** DWUMMER generates drum parts that feel composed, alive, and responsive—grooves develop, interact, and adapt over time, with musical phrasing, intelligent fills, and expressive dynamics, far beyond static algorithmic patterns.
+
 ---
 
 

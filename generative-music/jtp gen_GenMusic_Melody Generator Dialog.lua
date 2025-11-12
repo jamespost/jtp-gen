@@ -1,9 +1,24 @@
 -- @author James
--- @version 1.9
+-- @version 2.1
 -- @about
 --   # jtp gen: Melody Generator (Simple Dialog)
 --   Generates a MIDI melody with a simple built-in REAPER dialog (no ImGui required).
 --   Lets you set a few key parameters quickly and create a melody on the selected track.
+--
+--   NEW in v2.1: Enhanced Pianist/Guitarist Mode!
+--   - Polyphonic fills! Two-voice arpeggios, walking bass + melody, chord stabs
+--   - 6 new fill types: polyphonic arps, bass walks, tremolo, grace notes, rhythmic stabs
+--   - Timing humanization: groove/swing on chords, subtle note timing variations
+--   - Dynamic chord durations: punchy (50-60%), medium (65-75%), sustained (75-85%)
+--   - Velocity humanization: top notes emphasized, slight variations within chords
+--   - Piano-like chord stagger (2ms per voice for realistic attack)
+--
+--   v2.0: Pianist/Guitarist Polyphony Mode!
+--   - Thinks like a piano/guitar player: chords on strong beats, fills in between
+--   - Fill types: arpeggios (up/down), scale runs to next chord, decorative ornaments
+--   - Chord-based riffs and intelligent spacing (silence as a musical element)
+--   - Target-aware runs that approach the next chord smoothly
+--   - Voice leading applied to chord voicings for smooth progressions
 --
 --   NEW in v1.9: Goal-Oriented Tension and Release!
 --   - Phrases now aim toward musical targets (tonic/mediant/dominant)
@@ -42,7 +57,8 @@
 --   When a region is detected, note/octave/scale dialogs are skipped!
 --
 --   Advanced Polyphony with Music Theory (v1.4)
---   - Three polyphony modes: Free (creative), Harmonic (chords), Voice Leading (counterpoint)
+--   - Four polyphony modes: Free (creative), Harmonic (chords), Voice Leading (counterpoint), Pianist/Guitarist
+--   - Pianist/Guitarist mode: Chords on strong beats with fills between (runs, riffs, arpeggios)
 --   - Theory Weight parameter (0-1) blends between free/creative and strict music theory
 --   - Proper voice leading rules: contrary motion, smooth voice movement, consonance
 --   - Avoids parallel perfect intervals, voice crossing, and other theory violations
@@ -553,10 +569,11 @@ poly_mode = 'free'
 theory_weight = defaults.theory_weight
 
 if defaults.num_voices > 1 then
-    poly_modes = {"Free (Creative)", "Harmonic (Chords)", "Voice Leading (Counterpoint)"}
+    poly_modes = {"Free (Creative)", "Harmonic (Chords)", "Voice Leading (Counterpoint)", "Pianist/Guitarist (Chords + Fills)"}
     default_poly_idx = 1
     if defaults.poly_mode == 'harmonic' then default_poly_idx = 2
     elseif defaults.poly_mode == 'voice_leading' then default_poly_idx = 3
+    elseif defaults.poly_mode == 'pianist' then default_poly_idx = 4
     end
 
     poly_choice = show_popup_menu(poly_modes, default_poly_idx)
@@ -565,6 +582,7 @@ if defaults.num_voices > 1 then
     if poly_choice == 1 then poly_mode = 'free'
     elseif poly_choice == 2 then poly_mode = 'harmonic'
     elseif poly_choice == 3 then poly_mode = 'voice_leading'
+    elseif poly_choice == 4 then poly_mode = 'pianist'
     end
 end
 
@@ -2138,6 +2156,606 @@ else
                 deleted = deleted + 1
             end
         end
+
+    -- =============================
+    -- Mode 4: PIANIST/GUITARIST - Chords on beats with fills between
+    -- =============================
+    elseif poly_mode == 'pianist' then
+        log('Pianist/Guitarist polyphony mode - chords on beats with fills')
+
+        -- Configuration - fewer chord changes for more sustained playing
+        local NUM_CHORD_CHANGES = math.random(2, 4) -- Much fewer chords = longer sustain
+        local chord_types = {'triad', 'seventh', 'sus4'}
+
+        -- Fill types - expanded with more interesting options
+        local FILL_TYPES = {
+            'arpeggio_up',           -- Arpeggio ascending
+            'arpeggio_down',         -- Arpeggio descending
+            'run_to_chord',          -- Scale run approaching the chord
+            'decorative',            -- Ornamental notes around chord tones
+            'chord_riff',            -- Quick chord-tone based riff
+            'polyphonic_arp',        -- Two-voice arpeggio (polyphonic)
+            'walk_bass_melody',      -- Bass note + melody (polyphonic)
+            'tremolo_chord',         -- Rapid alternation between 2-3 chord tones
+            'grace_notes_to_chord',  -- Quick grace note flourish
+            'rhythmic_stabs',        -- Short rhythmic chord hits
+            'silence'                -- Rest/space
+        }
+
+        -- Helper: Get chord tones as a pool
+        local function get_chord_tones(root_scale_idx, chord_type)
+            return build_chord(scale_notes, root_scale_idx, chord_type, {-1, 1})
+        end
+
+        -- Helper: Generate arpeggio fill
+        local function generate_arpeggio(start_time, duration, chord_tones, direction)
+            local notes = {}
+            local sorted_tones = {}
+
+            -- Deduplicate and sort chord tones
+            local unique_tones = {}
+            for _, tone in ipairs(chord_tones) do
+                if not table_contains(unique_tones, tone) then
+                    table.insert(unique_tones, tone)
+                end
+            end
+            table.sort(unique_tones)
+
+            if direction == 'down' then
+                -- Reverse for descending
+                local reversed = {}
+                for i = #unique_tones, 1, -1 do
+                    table.insert(reversed, unique_tones[i])
+                end
+                sorted_tones = reversed
+            else
+                sorted_tones = unique_tones
+            end
+
+            -- Slower, more controlled arpeggios - use 8th or quarter notes
+            local note_dur = math.max(eighth_note, duration / math.min(#sorted_tones, 4))
+            local num_notes = math.floor(duration / note_dur)
+            num_notes = math.min(num_notes, 6) -- Max 6 notes in an arpeggio
+
+            local t = start_time
+
+            for i = 1, num_notes do
+                local pitch = sorted_tones[((i - 1) % #sorted_tones) + 1]
+                table.insert(notes, {
+                    time = t,
+                    duration = note_dur * 0.85, -- Slight staccato
+                    pitch = pitch,
+                    velocity = math.random(55, 75)
+                })
+                t = t + note_dur
+
+                if t >= start_time + duration then break end
+            end
+
+            return notes
+        end
+
+        -- Helper: Generate scale run approaching target chord
+        local function generate_run(start_time, duration, target_chord_root)
+            local notes = {}
+            local target_idx = find_index(scale_notes, target_chord_root)
+
+            -- Start from a few scale degrees away
+            local start_offset = math.random(2, 4) * (math.random(2) == 1 and 1 or -1)
+            local start_idx = clamp(target_idx + start_offset, 1, #scale_notes)
+
+            -- Use 16th or 8th notes depending on duration available
+            local base_note_dur = (duration < half_note) and (quarter_note_duration / 4) or (quarter_note_duration / 2)
+            local num_notes = math.floor(duration / base_note_dur)
+            num_notes = clamp(num_notes, 3, 8) -- Reasonable run length
+
+            local note_dur = duration / num_notes
+            local direction = (target_idx > start_idx) and 1 or -1
+
+            local t = start_time
+            local current_idx = start_idx
+
+            for i = 1, num_notes do
+                local pitch = scale_notes[current_idx]
+                table.insert(notes, {
+                    time = t,
+                    duration = note_dur * 0.75,
+                    pitch = pitch,
+                    velocity = math.random(60, 80)
+                })
+
+                -- Move toward target
+                current_idx = current_idx + direction
+                current_idx = clamp(current_idx, 1, #scale_notes)
+
+                t = t + note_dur
+
+                if t >= start_time + duration then break end
+            end
+
+            return notes
+        end
+
+        -- Helper: Generate decorative fill around chord tones
+        local function generate_decorative(start_time, duration, chord_tones)
+            local notes = {}
+
+            -- Slower decorative notes - 8th or quarter note based
+            local note_dur = math.max(eighth_note, duration / 5)
+            local num_notes = math.floor(duration / note_dur)
+            num_notes = clamp(num_notes, 2, 6)
+
+            local t = start_time
+
+            for i = 1, num_notes do
+                -- Pick a chord tone or neighboring scale degree
+                local base_tone = chord_tones[math.random(1, #chord_tones)]
+                local base_idx = find_index(scale_notes, base_tone)
+
+                -- Occasionally add neighbor tone
+                local offset = 0
+                if math.random() < 0.5 then
+                    offset = (math.random(2) == 1) and 1 or -1
+                end
+
+                local pitch_idx = clamp(base_idx + offset, 1, #scale_notes)
+                local pitch = scale_notes[pitch_idx]
+
+                table.insert(notes, {
+                    time = t,
+                    duration = note_dur * 0.7,
+                    pitch = pitch,
+                    velocity = math.random(50, 70)
+                })
+
+                t = t + note_dur
+
+                if t >= start_time + duration then break end
+            end
+
+            return notes
+        end
+
+        -- Helper: Generate chord-based riff
+        local function generate_chord_riff(start_time, duration, chord_tones)
+            local notes = {}
+
+            -- Create a short repeating pattern from chord tones
+            local pattern_length = math.random(2, 4)
+            local pattern = {}
+
+            -- Use unique chord tones only
+            local unique_tones = {}
+            for _, tone in ipairs(chord_tones) do
+                if not table_contains(unique_tones, tone) then
+                    table.insert(unique_tones, tone)
+                end
+            end
+
+            for i = 1, pattern_length do
+                pattern[i] = unique_tones[math.random(1, #unique_tones)]
+            end
+
+            -- Calculate note duration - use 8th notes typically
+            local note_dur = math.max(eighth_note * 0.75, duration / (pattern_length * 2))
+            local t = start_time
+            local max_repeats = math.floor(duration / (note_dur * pattern_length))
+            max_repeats = clamp(max_repeats, 1, 3)
+
+            for rep = 1, max_repeats do
+                for i = 1, pattern_length do
+                    if t >= start_time + duration then break end
+                    table.insert(notes, {
+                        time = t,
+                        duration = note_dur * 0.8,
+                        pitch = pattern[i],
+                        velocity = math.random(65, 85)
+                    })
+                    t = t + note_dur
+                end
+                if t >= start_time + duration then break end
+            end
+
+            return notes
+        end
+
+        -- Helper: Generate polyphonic arpeggio (two voices)
+        local function generate_polyphonic_arp(start_time, duration, chord_tones)
+            local notes = {}
+
+            local unique_tones = {}
+            for _, tone in ipairs(chord_tones) do
+                if not table_contains(unique_tones, tone) then
+                    table.insert(unique_tones, tone)
+                end
+            end
+            table.sort(unique_tones)
+
+            if #unique_tones < 2 then return generate_arpeggio(start_time, duration, chord_tones, 'up') end
+
+            -- Create two-voice pattern: low and high notes alternate/overlap
+            local note_dur = math.max(eighth_note * 0.75, duration / 5)
+            local num_events = math.floor(duration / note_dur)
+            num_events = clamp(num_events, 3, 8)
+
+            local t = start_time
+            local low_idx = 1
+            local high_idx = math.min(#unique_tones, math.random(3, 4))
+
+            for i = 1, num_events do
+                if t >= start_time + duration then break end
+
+                -- Alternate or combine voices
+                if i % 3 == 0 then
+                    -- Both notes together (interval)
+                    table.insert(notes, {
+                        time = t,
+                        duration = note_dur * 0.9,
+                        pitch = unique_tones[low_idx],
+                        velocity = math.random(60, 75),
+                        voice = 0
+                    })
+                    table.insert(notes, {
+                        time = t,
+                        duration = note_dur * 0.9,
+                        pitch = unique_tones[high_idx],
+                        velocity = math.random(55, 70),
+                        voice = 1
+                    })
+                else
+                    -- Single note from alternating register
+                    local use_high = (i % 2 == 0)
+                    local idx = use_high and high_idx or low_idx
+                    table.insert(notes, {
+                        time = t,
+                        duration = note_dur * 0.8,
+                        pitch = unique_tones[idx],
+                        velocity = math.random(55, 75),
+                        voice = use_high and 1 or 0
+                    })
+                end
+
+                -- Move indices
+                low_idx = (low_idx % #unique_tones) + 1
+                high_idx = ((high_idx - 1) % #unique_tones) + 1
+
+                t = t + note_dur
+            end
+
+            return notes
+        end
+
+        -- Helper: Generate walking bass + melody (polyphonic)
+        local function generate_walk_bass_melody(start_time, duration, chord_tones, target_root)
+            local notes = {}
+
+            local unique_tones = {}
+            for _, tone in ipairs(chord_tones) do
+                if not table_contains(unique_tones, tone) then
+                    table.insert(unique_tones, tone)
+                end
+            end
+            table.sort(unique_tones)
+
+            -- Bass walks toward target
+            local bass_note = unique_tones[1] -- Lowest chord tone
+            local target_idx = target_root and find_index(scale_notes, target_root) or find_index(scale_notes, unique_tones[1])
+            local bass_idx = find_index(scale_notes, bass_note)
+
+            local note_dur = quarter_note
+            local num_steps = math.floor(duration / note_dur)
+            num_steps = clamp(num_steps, 1, 4)
+
+            local direction = (target_idx > bass_idx) and 1 or -1
+            local t = start_time
+
+            for i = 1, num_steps do
+                if t >= start_time + duration then break end
+
+                -- Bass note
+                local bass_pitch = scale_notes[bass_idx]
+                table.insert(notes, {
+                    time = t,
+                    duration = note_dur * 0.9,
+                    pitch = bass_pitch,
+                    velocity = math.random(70, 85),
+                    voice = 0
+                })
+
+                -- Melody note from upper chord tones
+                if #unique_tones >= 3 then
+                    local melody_pitch = unique_tones[math.random(2, #unique_tones)]
+                    table.insert(notes, {
+                        time = t + note_dur * 0.5, -- Offset for rhythm
+                        duration = note_dur * 0.4,
+                        pitch = melody_pitch,
+                        velocity = math.random(60, 75),
+                        voice = 1
+                    })
+                end
+
+                -- Walk bass
+                bass_idx = clamp(bass_idx + direction, 1, #scale_notes)
+                t = t + note_dur
+            end
+
+            return notes
+        end
+
+        -- Helper: Generate tremolo between chord tones
+        local function generate_tremolo(start_time, duration, chord_tones)
+            local notes = {}
+
+            local unique_tones = {}
+            for _, tone in ipairs(chord_tones) do
+                if not table_contains(unique_tones, tone) then
+                    table.insert(unique_tones, tone)
+                end
+            end
+
+            if #unique_tones < 2 then return generate_arpeggio(start_time, duration, chord_tones, 'up') end
+
+            -- Pick 2-3 notes to alternate rapidly
+            local tremolo_notes = {}
+            for i = 1, math.min(3, #unique_tones) do
+                table.insert(tremolo_notes, unique_tones[math.random(1, #unique_tones)])
+            end
+
+            -- Very fast alternation
+            local note_dur = sixteenth_note * 0.75
+            local num_notes = math.floor(duration / note_dur)
+            num_notes = clamp(num_notes, 4, 16)
+
+            local t = start_time
+            for i = 1, num_notes do
+                if t >= start_time + duration then break end
+
+                local pitch = tremolo_notes[((i - 1) % #tremolo_notes) + 1]
+                table.insert(notes, {
+                    time = t,
+                    duration = note_dur * 0.7,
+                    pitch = pitch,
+                    velocity = math.random(50, 70),
+                    voice = 0
+                })
+                t = t + note_dur
+            end
+
+            return notes
+        end
+
+        -- Helper: Generate grace notes into chord
+        local function generate_grace_notes(start_time, duration, target_root)
+            local notes = {}
+
+            local target_idx = find_index(scale_notes, target_root)
+
+            -- Quick grace note flourish (2-4 notes) leading to target
+            local num_grace = math.random(2, 4)
+            local grace_dur = (duration / num_grace) * 0.6 -- Quick notes
+
+            local current_idx = clamp(target_idx + math.random(2, 4) * (math.random(2) == 1 and 1 or -1), 1, #scale_notes)
+            local direction = (target_idx > current_idx) and 1 or -1
+
+            local t = start_time
+            for i = 1, num_grace do
+                if t >= start_time + duration then break end
+
+                table.insert(notes, {
+                    time = t,
+                    duration = grace_dur * 0.6,
+                    pitch = scale_notes[current_idx],
+                    velocity = math.random(55, 75),
+                    voice = 0
+                })
+
+                current_idx = clamp(current_idx + direction, 1, #scale_notes)
+                t = t + grace_dur
+            end
+
+            return notes
+        end
+
+        -- Helper: Generate rhythmic chord stabs
+        local function generate_rhythmic_stabs(start_time, duration, chord_tones)
+            local notes = {}
+
+            local unique_tones = {}
+            for _, tone in ipairs(chord_tones) do
+                if not table_contains(unique_tones, tone) then
+                    table.insert(unique_tones, tone)
+                end
+            end
+
+            -- 2-3 short chord hits
+            local num_stabs = math.random(2, 3)
+            local stab_spacing = duration / num_stabs
+
+            local t = start_time
+            for i = 1, num_stabs do
+                if t >= start_time + duration then break end
+
+                -- Pick 2-3 notes for each stab
+                local num_voices_in_stab = math.min(3, #unique_tones)
+                local stab_dur = eighth_note * 0.5 -- Short and punchy
+
+                for v = 1, num_voices_in_stab do
+                    local pitch = unique_tones[math.random(1, #unique_tones)]
+                    table.insert(notes, {
+                        time = t,
+                        duration = stab_dur,
+                        pitch = pitch,
+                        velocity = math.random(70, 90),
+                        voice = v - 1
+                    })
+                end
+
+                t = t + stab_spacing
+            end
+
+            return notes
+        end
+
+        -- Main generation loop for pianist/guitarist mode
+        local prev_chord_pitches = {}
+        local chord_times = {} -- Store when chords happen
+        local fills = {} -- Store fill events
+
+        -- First pass: determine chord positions and types
+        local total_duration = end_time - start_time
+        local time_per_chord = total_duration / NUM_CHORD_CHANGES
+
+        log('Total duration: ', total_duration, 's, Time per chord: ', time_per_chord, 's')
+
+        for i = 1, NUM_CHORD_CHANGES do
+            local chord_time = start_time + (i - 1) * time_per_chord
+
+            -- Add subtle groove/swing to chord timing (±5% of beat)
+            local groove_offset = (math.random() * 2 - 1) * (quarter_note_duration * 0.05)
+            chord_time = chord_time + groove_offset
+
+            -- Choose root and chord type
+            local root_idx = math.random(1, #scale_notes)
+            local chord_type = choose_random(chord_types)
+            local chord_pool = get_chord_tones(root_idx, chord_type)
+
+            -- Voice lead to this chord
+            local chord_pitches = find_best_voice_leading(prev_chord_pitches, chord_pool, theory_weight)
+
+            -- Chord duration: More varied for interest
+            -- Sometimes shorter punchy chords (50-60%), sometimes longer sustains (70-85%)
+            local chord_style = math.random()
+            local chord_hold_percent
+            if chord_style < 0.3 then
+                chord_hold_percent = math.random(50, 60) -- Punchy
+            elseif chord_style < 0.7 then
+                chord_hold_percent = math.random(65, 75) -- Medium
+            else
+                chord_hold_percent = math.random(75, 85) -- Long sustain
+            end
+
+            local chord_hold = time_per_chord * chord_hold_percent / 100
+            local fill_space = time_per_chord - chord_hold
+
+            log('  Chord ', i, ' at ', chord_time, 's, hold: ', chord_hold, 's, fill space: ', fill_space, 's')
+
+            -- Store chord info
+            table.insert(chord_times, {
+                time = chord_time,
+                duration = chord_hold,
+                pitches = chord_pitches,
+                root = scale_notes[root_idx],
+                chord_tones = chord_pool
+            })
+
+            -- Generate fill before NEXT chord (not after this one)
+            if i < NUM_CHORD_CHANGES and fill_space > eighth_note then
+                local fill_start = chord_time + chord_hold
+                local next_root_idx = math.random(1, #scale_notes) -- Preview next chord root
+
+                -- 70% chance of actual fill, 30% silence
+                if math.random() < 0.7 then
+                    local fill_type = FILL_TYPES[math.random(1, #FILL_TYPES)]
+
+                    -- Don't allow silence type here - we already have 30% chance of no fill
+                    while fill_type == 'silence' do
+                        fill_type = FILL_TYPES[math.random(1, #FILL_TYPES)]
+                    end
+
+                    log('    Fill type: ', fill_type, ' at ', fill_start, 's for ', fill_space, 's')
+
+                    table.insert(fills, {
+                        type = fill_type,
+                        time = fill_start,
+                        duration = fill_space * 0.9, -- Use 90% to avoid overlap
+                        target_root = scale_notes[next_root_idx],
+                        chord_tones = chord_pool
+                    })
+                else
+                    log('    Silence (rest)')
+                end
+            end
+
+            prev_chord_pitches = chord_pitches
+        end
+
+        -- Second pass: Insert chords into MIDI with humanization
+        for _, chord_event in ipairs(chord_times) do
+            -- Slight timing offset per chord for groove
+            local chord_humanize = (math.random() * 2 - 1) * 0.005 -- ±5ms
+
+            for voice = 0, math.min(num_voices - 1, #chord_event.pitches - 1) do
+                local pitch = chord_event.pitches[voice + 1]
+
+                -- Varied velocities within chord - top note slightly louder
+                local vel_base = math.random(70, 90)
+                local vel = (voice == 0) and vel_base + math.random(5, 10) or vel_base + math.random(-5, 5)
+                vel = clamp(vel, 60, 100)
+
+                -- Very slight stagger on chord notes (piano-like)
+                local voice_offset = voice * 0.002 -- 2ms stagger per voice
+
+                reaper.MIDI_InsertNote(
+                    take, false, false,
+                    timeToPPQ(chord_event.time + chord_humanize + voice_offset),
+                    timeToPPQ(chord_event.time + chord_event.duration),
+                    voice,
+                    pitch,
+                    vel,
+                    false
+                )
+            end
+        end
+
+        -- Third pass: Insert fills between chords with humanization
+        for _, fill_event in ipairs(fills) do
+            local fill_notes = {}
+
+            if fill_event.type == 'arpeggio_up' then
+                fill_notes = generate_arpeggio(fill_event.time, fill_event.duration, fill_event.chord_tones, 'up')
+            elseif fill_event.type == 'arpeggio_down' then
+                fill_notes = generate_arpeggio(fill_event.time, fill_event.duration, fill_event.chord_tones, 'down')
+            elseif fill_event.type == 'run_to_chord' and fill_event.target_root then
+                fill_notes = generate_run(fill_event.time, fill_event.duration, fill_event.target_root)
+            elseif fill_event.type == 'decorative' then
+                fill_notes = generate_decorative(fill_event.time, fill_event.duration, fill_event.chord_tones)
+            elseif fill_event.type == 'chord_riff' then
+                fill_notes = generate_chord_riff(fill_event.time, fill_event.duration, fill_event.chord_tones)
+            elseif fill_event.type == 'polyphonic_arp' then
+                fill_notes = generate_polyphonic_arp(fill_event.time, fill_event.duration, fill_event.chord_tones)
+            elseif fill_event.type == 'walk_bass_melody' then
+                fill_notes = generate_walk_bass_melody(fill_event.time, fill_event.duration, fill_event.chord_tones, fill_event.target_root)
+            elseif fill_event.type == 'tremolo_chord' then
+                fill_notes = generate_tremolo(fill_event.time, fill_event.duration, fill_event.chord_tones)
+            elseif fill_event.type == 'grace_notes_to_chord' and fill_event.target_root then
+                fill_notes = generate_grace_notes(fill_event.time, fill_event.duration, fill_event.target_root)
+            elseif fill_event.type == 'rhythmic_stabs' then
+                fill_notes = generate_rhythmic_stabs(fill_event.time, fill_event.duration, fill_event.chord_tones)
+            -- 'silence' means no fill notes - just space
+            end
+
+            -- Insert fill notes with timing humanization
+            for _, note in ipairs(fill_notes) do
+                -- Add subtle timing variation (±10ms)
+                local humanize_offset = (math.random() * 2 - 1) * 0.010
+                local note_time = note.time + humanize_offset
+
+                -- Use voice from note if specified (for polyphonic fills), otherwise channel 0
+                local channel = note.voice or 0
+
+                reaper.MIDI_InsertNote(
+                    take, false, false,
+                    timeToPPQ(note_time),
+                    timeToPPQ(note_time + note.duration),
+                    channel,
+                    note.pitch,
+                    note.velocity,
+                    false
+                )
+            end
+        end
+
+        log('Generated ', NUM_CHORD_CHANGES, ' chords with ', #fills, ' fills')
     end
 end
 

@@ -140,17 +140,82 @@ local function generate_euclidean_rhythm(N, K, R)
     return pattern
 end
 
--- Phase 2.2: Multi-Voice Generation Parameters
--- Default voice configurations: {N = steps, K = pulses, R = rotation}
 local VoiceDefaults = {
     KICK = {N = 16, K = 4, R = 0},
     SNARE = {N = 16, K = 4, R = 8},
     HIHAT = {N = 16, K = 8, R = 0},
 }
 
+-- Phase 3: Dynamics and Structure Helpers
+-- Velocity accent map for 16-step grid (strong beats: 1, 5, 9, 13)
+local function get_accent_velocity(base, step, N)
+    local accents = {[1]=true, [5]=true, [9]=true, [13]=true}
+    if accents[step] then return base + 15 end
+    return base
+end
+
+-- Velocity jitter (humanization)
+local function velocity_jitter(base)
+    return base + math.random(-10, 10)
+end
+
+-- Q-Swing logic for hi-hat (delay every 2nd note)
+local function get_swing_ppq_offset(step, swing_percent, ppq_per_step)
+    if ((step-1) % 2 == 1) then
+        local swing = (swing_percent or 60) / 100
+        return math.floor(ppq_per_step * swing * 0.5)
+    end
+    return 0
+end
+
+-- Snare ghost note probability (side stick, velocity 50-70)
+local function maybe_insert_ghost_snare(take, bar, step, N, ppq_per_bar, ppq_per_step, base_ppq, prng_seed)
+    local ghost_chance = 0.5 -- 50% probability
+    if math.random() < ghost_chance then
+        local ghost_pitch = DrumMap.SIDE_STICK
+        local ghost_velocity = math.random(50, 70)
+        local ghost_ppq = base_ppq + math.floor(ppq_per_step * 0.5) -- 1/16th after main snare
+        reaper.MIDI_InsertNote(
+            take, false, false,
+            ghost_ppq,
+            ghost_ppq + TimeMap_QNToPPQ(0.08),
+            0,
+            ghost_pitch,
+            ghost_velocity,
+            true
+        )
+    end
+end
+
+-- Drum fill logic for last bar
+local function insert_drum_fill(take, bar, ppq_per_bar, N, base_ppq)
+    local fill_notes = {
+        {pitch=DrumMap.TOM_HIGH, velocity=110},
+        {pitch=DrumMap.SNARE, velocity=120},
+        {pitch=DrumMap.TOM_MID, velocity=105},
+        {pitch=DrumMap.TOM_LOW, velocity=100},
+        {pitch=DrumMap.CRASH, velocity=127},
+    }
+    local steps = #fill_notes
+    local fill_ppq_step = ppq_per_bar / steps
+    for i, note in ipairs(fill_notes) do
+        local ppq = base_ppq + math.floor((i-1) * fill_ppq_step)
+        reaper.MIDI_InsertNote(
+            take, false, false,
+            ppq,
+            ppq + TimeMap_QNToPPQ(0.12),
+            0,
+            note.pitch,
+            velocity_jitter(note.velocity),
+            true
+        )
+    end
+end
+
 -- Phase 1 + Phase 2.3: Core Rhythm Engine with I/O Handler
 -- params: table containing seed, pattern_length_bars, and voice configurations
 function generate_dwummer_pattern(params)
+
     -- Task 1.1: Transactional Safety
     reaper.Undo_BeginBlock()
 
@@ -166,27 +231,19 @@ function generate_dwummer_pattern(params)
     set_seed(params.seed or 12345)
 
     -- Task 1.2: Item Creation
-    -- Get cursor position as start time
     local start_time = reaper.GetCursorPosition()
-
-    -- Calculate pattern duration in quarter notes
     local pattern_length_bars = params.pattern_length_bars or 4
-    local qn_per_bar = 4  -- 4/4 time signature
+    local qn_per_bar = 4
     local total_qn = pattern_length_bars * qn_per_bar
-
     local start_qn = reaper.TimeMap2_timeToQN(0, start_time)
     local end_qn = start_qn + total_qn
     local end_time = reaper.TimeMap2_QNToTime(0, end_qn)
-
-    -- Create the MIDI item
     local item = reaper.CreateNewMIDIItemInProj(track, start_time, end_time, false)
     if not item then
         reaper.ShowMessageBox("Failed to create MIDI item.", "Error", 0)
         reaper.Undo_EndBlock("jtp gen: DWUMMER Drum Generator", -1)
         return
     end
-
-    -- Get the active take
     local take = reaper.GetActiveTake(item)
     if not take then
         reaper.ShowMessageBox("Failed to get MIDI take.", "Error", 0)
@@ -194,67 +251,76 @@ function generate_dwummer_pattern(params)
         return
     end
 
-    -- Task 2.3: Integrate and Loop - Generate patterns for all voices
-    local note_length = TimeMap_QNToPPQ(0.1)  -- Short note length for drums
+    -- Phase 3: Swing and fill parameters
+    local swing_percent = params.swing_percent or 60
+    local ghost_chance = params.ghost_chance or 0.5
 
-    -- Define voices to generate
+    local note_length = TimeMap_QNToPPQ(0.1)
     local voices = {
         {name = "KICK", pitch = DrumMap.KICK, velocity = 100, config = params.kick or VoiceDefaults.KICK},
         {name = "SNARE", pitch = DrumMap.SNARE, velocity = 95, config = params.snare or VoiceDefaults.SNARE},
         {name = "HIHAT", pitch = DrumMap.HIHAT_CLOSED, velocity = 80, config = params.hihat or VoiceDefaults.HIHAT},
     }
 
-    -- Generate and insert notes for each voice
+    local ppq_per_bar = TimeMap_QNToPPQ(4)
+
     for _, voice in ipairs(voices) do
         local N = voice.config.N
         local K = voice.config.K
         local R = voice.config.R
-
-        -- Generate the Euclidean pattern for this voice
         local pattern = generate_euclidean_rhythm(N, K, R)
-
-        -- Calculate PPQ per step based on pattern length
-        -- One bar = 4 quarter notes = 4 * 960 PPQ
-        local ppq_per_bar = TimeMap_QNToPPQ(4)
         local ppq_per_step = ppq_per_bar / N
 
-        -- Loop over all bars in the pattern
         for bar = 0, pattern_length_bars - 1 do
-            -- Insert notes according to the Euclidean pattern
+            local base_ppq = bar * ppq_per_bar
+
+            -- Phase 3.4: Fill logic for last bar
+            if bar == pattern_length_bars - 1 and voice.name == "KICK" then
+                insert_drum_fill(take, bar, ppq_per_bar, N, base_ppq)
+            end
+
             for step = 1, N do
                 if pattern[step] == 1 then
-                    -- Calculate absolute PPQ position
-                    local ppq_position = (bar * ppq_per_bar) + ((step - 1) * ppq_per_step)
+                    local ppq_position = base_ppq + ((step - 1) * ppq_per_step)
+                    local velocity = voice.velocity
 
-                    -- Task 1.3: Note Insertion with noSort = true
+                    -- Phase 3.1: Velocity accent + jitter
+                    velocity = get_accent_velocity(velocity, step, N)
+                    velocity = velocity_jitter(velocity)
+
+                    -- Phase 3.2: Q-Swing for hi-hat
+                    local swing_offset = 0
+                    if voice.name == "HIHAT" then
+                        swing_offset = get_swing_ppq_offset(step, swing_percent, ppq_per_step)
+                    end
+
+                    -- Insert main note
                     reaper.MIDI_InsertNote(
                         take,
-                        false,  -- selected
-                        false,  -- muted
-                        math.floor(ppq_position),
-                        math.floor(ppq_position + note_length),
-                        0,      -- channel (0-based, so channel 1)
+                        false,
+                        false,
+                        math.floor(ppq_position + swing_offset),
+                        math.floor(ppq_position + swing_offset + note_length),
+                        0,
                         voice.pitch,
-                        voice.velocity,
-                        true    -- noSortInOptional
+                        math.max(1, math.min(127, velocity)),
+                        true
                     )
+
+                    -- Phase 3.3: Snare ghost notes
+                    if voice.name == "SNARE" and math.random() < ghost_chance then
+                        maybe_insert_ghost_snare(take, bar, step, N, ppq_per_bar, ppq_per_step, base_ppq + ((step - 1) * ppq_per_step), params.seed)
+                    end
                 end
             end
         end
     end
 
-    -- Task 1.4: Finalization
-    -- Sort MIDI events after all insertions
     reaper.MIDI_Sort(take)
-
-    -- Update MIDI item appearance
     reaper.UpdateItemInProject(item)
-
-    -- Task 1.1: End transaction
     reaper.Undo_EndBlock("jtp gen: DWUMMER Drum Generator", -1)
-
     reaper.ShowConsoleMsg(string.format(
-        "DWUMMER: Generated %d-bar pattern with Kick[%d,%d,%d] Snare[%d,%d,%d] HiHat[%d,%d,%d]\n",
+        "DWUMMER: Generated %d-bar pattern with Kick[%d,%d,%d] Snare[%d,%d,%d] HiHat[%d,%d,%d] (Phase 3)\n",
         pattern_length_bars,
         params.kick.N, params.kick.K, params.kick.R,
         params.snare.N, params.snare.K, params.snare.R,

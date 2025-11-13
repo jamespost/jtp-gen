@@ -2269,6 +2269,342 @@ else
             return build_chord(scale_notes, root_scale_idx, chord_type, {-1, 1})
         end
 
+        -- =============================
+        -- LEFT HAND & RIGHT HAND THINKING MODULES
+        -- =============================
+
+        -- LEFT HAND THOUGHTS: Harmonic foundation, bass, and accompaniment decisions
+        -- The left hand is responsible for establishing harmony and rhythm
+        local LeftHand = {
+            -- State tracking
+            last_chord_time = 0,
+            last_bass_note = nil,
+            energy_level = 0.5, -- 0=sparse, 1=dense
+            voicing_preference = 'closed', -- 'closed', 'open', 'rootless'
+
+            -- Decision: Should I play a bass note?
+            should_play_bass = function(self, chord_time, time_since_last_chord)
+                -- Always play bass on chord changes
+                if time_since_last_chord >= quarter_note * 3 then
+                    return true, 'chord_change'
+                end
+
+                -- Walking bass: play on strong beats
+                if self.energy_level > 0.6 and math.random() < 0.7 then
+                    return true, 'walking'
+                end
+
+                -- Pedal tone: sustain bass
+                if self.energy_level < 0.4 and math.random() < 0.5 then
+                    return true, 'pedal'
+                end
+
+                return false, 'rest'
+            end,
+
+            -- Decision: What bass note should I play?
+            choose_bass_note = function(self, chord_root, chord_tones, bass_type)
+                if bass_type == 'chord_change' then
+                    -- Play the root
+                    self.last_bass_note = chord_root - 12 -- One octave down
+                    return self.last_bass_note
+
+                elseif bass_type == 'walking' then
+                    -- Walk toward next chord root (simple chromatic/scale-based walking)
+                    if self.last_bass_note then
+                        local direction = (chord_root > self.last_bass_note) and 1 or -1
+                        -- Find closest scale note to last bass
+                        local closest_idx = 1
+                        local closest_dist = math.huge
+                        for idx, note in ipairs(scale_notes) do
+                            local dist = math.abs(note - 12 - self.last_bass_note)
+                            if dist < closest_dist then
+                                closest_dist = dist
+                                closest_idx = idx
+                            end
+                        end
+                        local bass_idx = clamp(closest_idx + direction, 1, #scale_notes)
+                        self.last_bass_note = scale_notes[bass_idx] - 12
+                        return self.last_bass_note
+                    else
+                        self.last_bass_note = chord_root - 12
+                        return self.last_bass_note
+                    end
+
+                elseif bass_type == 'pedal' then
+                    -- Sustain current bass note
+                    return self.last_bass_note or (chord_root - 12)
+                end
+
+                return chord_root - 12
+            end,
+
+            -- Decision: How should I voice this chord?
+            choose_voicing = function(self, chord_pool)
+                local sorted_tones = {}
+                for _, tone in ipairs(chord_pool) do
+                    if not table_contains(sorted_tones, tone) then
+                        table.insert(sorted_tones, tone)
+                    end
+                end
+                table.sort(sorted_tones)
+
+                if self.voicing_preference == 'closed' then
+                    -- Closed voicing: notes close together in middle register
+                    local voicing = {}
+                    for i = 1, math.min(3, #sorted_tones) do
+                        table.insert(voicing, sorted_tones[i])
+                    end
+                    return voicing
+
+                elseif self.voicing_preference == 'open' then
+                    -- Open voicing: spread out notes
+                    local voicing = {}
+                    if #sorted_tones >= 3 then
+                        table.insert(voicing, sorted_tones[1])
+                        table.insert(voicing, sorted_tones[math.ceil(#sorted_tones / 2)])
+                        table.insert(voicing, sorted_tones[#sorted_tones])
+                    else
+                        voicing = sorted_tones
+                    end
+                    return voicing
+
+                elseif self.voicing_preference == 'rootless' then
+                    -- Rootless voicing: omit the root (jazz style)
+                    local voicing = {}
+                    for i = 2, math.min(4, #sorted_tones) do
+                        table.insert(voicing, sorted_tones[i])
+                    end
+                    if #voicing == 0 then voicing = {sorted_tones[1]} end
+                    return voicing
+                end
+
+                return sorted_tones
+            end,
+
+            -- Decision: What's my rhythmic approach?
+            choose_rhythm_pattern = function(self)
+                if self.energy_level > 0.7 then
+                    return 'active' -- Syncopated, busy
+                elseif self.energy_level > 0.4 then
+                    return 'moderate' -- Steady, on-beat
+                else
+                    return 'sparse' -- Long sustained notes
+                end
+            end,
+
+            -- Update energy based on musical context
+            update_energy = function(self, time_in_phrase)
+                -- Energy tends to build toward middle, release at end
+                if time_in_phrase < 0.3 then
+                    self.energy_level = math.random() * 0.4 + 0.3 -- 0.3-0.7
+                elseif time_in_phrase < 0.7 then
+                    self.energy_level = math.random() * 0.3 + 0.5 -- 0.5-0.8
+                else
+                    self.energy_level = math.random() * 0.4 + 0.2 -- 0.2-0.6
+                end
+            end
+        }
+
+        -- RIGHT HAND THOUGHTS: Melodic expression, fills, and ornamentation decisions
+        -- The right hand is responsible for melody, embellishment, and virtuosity
+        local RightHand = {
+            -- State tracking
+            last_phrase_type = nil,
+            improvisation_intensity = 0.5, -- 0=simple, 1=virtuosic
+            melodic_direction = 0, -- -1=descending, 0=static, 1=ascending
+            phrase_count = 0,
+
+            -- Decision: What type of fill should I play?
+            choose_fill_type = function(self, available_duration, chord_context, target_root)
+                -- Update intensity over time
+                self.phrase_count = self.phrase_count + 1
+                self:update_intensity()
+
+                local duration_factor = available_duration / quarter_note
+
+                -- Short duration: quick ornaments
+                if duration_factor < 1 then
+                    local quick_fills = {'mordent', 'trill_ornament', 'grace_notes_to_chord'}
+                    return quick_fills[math.random(1, #quick_fills)]
+
+                -- Medium duration: runs and arpeggios
+                elseif duration_factor < 3 then
+                    if self.improvisation_intensity > 0.6 then
+                        -- Virtuosic options
+                        local medium_virtuoso = {'chromatic_approach', 'triplet_run', 'enclosure',
+                                                  'grace_cluster', 'syncopated_riff'}
+                        return medium_virtuoso[math.random(1, #medium_virtuoso)]
+                    else
+                        -- Simpler options
+                        local medium_simple = {'arpeggio_up', 'arpeggio_down', 'decorative',
+                                                'run_to_chord', 'turn_ornament'}
+                        return medium_simple[math.random(1, #medium_simple)]
+                    end
+
+                -- Long duration: developed phrases
+                else
+                    if self.improvisation_intensity > 0.7 then
+                        -- Complex development
+                        local long_complex = {'motif_sequence', 'cascade_descent', 'ascending_rocket',
+                                              'quintuplet_flourish', 'wide_interval_jump', 'tension_resolution'}
+                        return long_complex[math.random(1, #long_complex)]
+                    else
+                        -- Musical phrases
+                        local long_musical = {'motif_fragment', 'rubato_passage', 'modal_exploration',
+                                              'polyphonic_arp', 'chord_riff'}
+                        return long_musical[math.random(1, #long_musical)]
+                    end
+                end
+            end,
+
+            -- Decision: Should I add ornamentation to this phrase?
+            should_add_ornament = function(self, note_duration)
+                if note_duration < eighth_note then
+                    return false -- Too short
+                end
+
+                -- More likely at higher intensity
+                local ornament_chance = self.improvisation_intensity * 0.4
+                return math.random() < ornament_chance
+            end,
+
+            -- Decision: What's my dynamic approach?
+            choose_dynamics = function(self, fill_type, position_in_phrase)
+                local base_vel = 60
+                local vel_range = 20
+
+                -- Adjust based on intensity
+                base_vel = base_vel + (self.improvisation_intensity * 20)
+
+                -- Adjust based on phrase position
+                if position_in_phrase < 0.3 then
+                    -- Start softer
+                    base_vel = base_vel - 10
+                elseif position_in_phrase > 0.7 then
+                    -- End with emphasis
+                    base_vel = base_vel + 10
+                end
+
+                -- Certain fill types are naturally louder
+                if fill_type == 'cascade_descent' or fill_type == 'ascending_rocket' or
+                   fill_type == 'wide_interval_jump' then
+                    base_vel = base_vel + 15
+                end
+
+                return {
+                    base = clamp(base_vel, 40, 100),
+                    range = vel_range
+                }
+            end,
+
+            -- Decision: Should I rest or play?
+            should_play_fill = function(self, time_since_last_fill)
+                -- Sparse at low intensity
+                if self.improvisation_intensity < 0.3 then
+                    return math.random() < 0.4
+                end
+
+                -- Always play at high intensity
+                if self.improvisation_intensity > 0.7 then
+                    return true
+                end
+
+                -- Medium intensity: vary based on timing
+                if time_since_last_fill < quarter_note then
+                    return math.random() < 0.3 -- Less likely if we just played
+                else
+                    return math.random() < 0.8 -- More likely after space
+                end
+            end,
+
+            -- Decision: What register should I play in?
+            choose_register = function(self, chord_tones)
+                -- Track melodic direction
+                if self.melodic_direction > 0 then
+                    -- Ascending: favor higher notes
+                    local sorted = {}
+                    for _, t in ipairs(chord_tones) do table.insert(sorted, t) end
+                    table.sort(sorted)
+                    return sorted[math.ceil(#sorted * 0.7)] -- Upper 30%
+
+                elseif self.melodic_direction < 0 then
+                    -- Descending: favor lower notes
+                    local sorted = {}
+                    for _, t in ipairs(chord_tones) do table.insert(sorted, t) end
+                    table.sort(sorted)
+                    return sorted[math.ceil(#sorted * 0.3)] -- Lower 30%
+                else
+                    -- Static: middle register
+                    return chord_tones[math.random(1, #chord_tones)]
+                end
+            end,
+
+            -- Update improvisation intensity
+            update_intensity = function(self)
+                -- Intensity evolves: builds toward climax, releases
+                if self.phrase_count <= 3 then
+                    -- Building
+                    self.improvisation_intensity = math.min(1.0, self.improvisation_intensity + 0.1)
+                elseif self.phrase_count <= 6 then
+                    -- Peak
+                    self.improvisation_intensity = math.random() * 0.2 + 0.7 -- 0.7-0.9
+                else
+                    -- Release
+                    self.improvisation_intensity = math.max(0.3, self.improvisation_intensity - 0.15)
+                end
+
+                -- Update direction occasionally
+                if math.random() < 0.3 then
+                    local directions = {-1, 0, 1}
+                    self.melodic_direction = directions[math.random(1, #directions)]
+                end
+            end,
+
+            -- Remember what we played for contrast
+            remember_phrase = function(self, fill_type)
+                self.last_phrase_type = fill_type
+            end
+        }
+
+        -- COORDINATION: How the hands work together
+        local HandCoordination = {
+            -- Decide if hands should play together or independently
+            should_synchronize = function(left_energy, right_intensity, moment_type)
+                -- Always sync on chord changes
+                if moment_type == 'chord_change' then
+                    return true
+                end
+
+                -- Sync for dramatic moments at high energy
+                if left_energy > 0.7 and right_intensity > 0.7 then
+                    return math.random() < 0.6
+                end
+
+                -- Usually independent for textural interest
+                return math.random() < 0.2
+            end,
+
+            -- Left hand can request the right hand to leave space
+            left_requests_space = function(left_pattern)
+                if left_pattern == 'active' then
+                    return true, 'bass_prominent' -- Right hand plays simpler
+                end
+                return false, nil
+            end,
+
+            -- Right hand can request left hand support
+            right_requests_support = function(right_fill_type)
+                -- Virtuosic fills need harmonic support
+                if right_fill_type == 'cascade_descent' or
+                   right_fill_type == 'ascending_rocket' or
+                   right_fill_type == 'wide_interval_jump' then
+                    return true, 'sustain' -- Left hand holds chord
+                end
+                return false, nil
+            end
+        }
+
         -- Helper: Get chromatic neighbor (not necessarily in scale)
         local function get_chromatic_neighbor(pitch, direction)
             return pitch + direction
@@ -3718,15 +4054,25 @@ else
         local prev_chord_pitches = {}
         local chord_times = {} -- Store when chords happen
         local fills = {} -- Store fill events
+        local bass_notes = {} -- Store bass line separately
 
         -- First pass: determine chord positions and types
         local total_duration = end_time - start_time
         local time_per_chord = total_duration / NUM_CHORD_CHANGES
 
         log('Total duration: ', total_duration, 's, Time per chord: ', time_per_chord, 's')
+        log('=== PIANIST MODE: HANDS THINKING INDEPENDENTLY ===')
 
         for i = 1, NUM_CHORD_CHANGES do
             local chord_time = start_time + (i - 1) * time_per_chord
+            local time_in_phrase = (i - 1) / (NUM_CHORD_CHANGES - 1)
+
+            -- LEFT HAND THINKING: Update state
+            LeftHand:update_energy(time_in_phrase)
+            local left_rhythm = LeftHand:choose_rhythm_pattern()
+
+            log('\n--- Chord ', i, ' at ', string.format('%.2f', chord_time), 's ---')
+            log('  Left hand energy: ', string.format('%.2f', LeftHand.energy_level), ', rhythm: ', left_rhythm)
 
             -- Add subtle groove/swing to chord timing (±5% of beat)
             local groove_offset = (math.random() * 2 - 1) * (quarter_note_duration * 0.05)
@@ -3736,26 +4082,55 @@ else
             local root_idx = math.random(1, #scale_notes)
             local chord_type = choose_random(chord_types)
             local chord_pool = get_chord_tones(root_idx, chord_type)
+            local chord_root = scale_notes[root_idx]
 
-            -- Voice lead to this chord
-            local chord_pitches = find_best_voice_leading(prev_chord_pitches, chord_pool, theory_weight)
+            -- LEFT HAND DECISION: Should I play bass?
+            local time_since_last = i > 1 and (chord_time - chord_times[#chord_times].time) or 999
+            local should_bass, bass_type = LeftHand:should_play_bass(chord_time, time_since_last)
 
-            -- Chord duration: SHORTER chords for MORE FILL SPACE!
-            -- Reduced from 50-85% to 30-60% for maximum fill activity
-            local chord_style = math.random()
-            local chord_hold_percent
-            if chord_style < 0.3 then
-                chord_hold_percent = math.random(30, 40) -- Very punchy
-            elseif chord_style < 0.7 then
-                chord_hold_percent = math.random(40, 50) -- Short
+            if should_bass then
+                local bass_pitch = LeftHand:choose_bass_note(chord_root, chord_pool, bass_type)
+                table.insert(bass_notes, {
+                    time = chord_time,
+                    pitch = bass_pitch,
+                    duration = time_per_chord * 0.9,
+                    type = bass_type,
+                    velocity = (bass_type == 'walking') and math.random(75, 90) or math.random(70, 85)
+                })
+                log('  Left hand bass: ', bass_type, ', pitch: ', bass_pitch)
             else
-                chord_hold_percent = math.random(50, 60) -- Medium
+                log('  Left hand: resting (no bass)')
+            end
+
+            -- LEFT HAND DECISION: How should I voice the chord?
+            -- Randomly update voicing preference
+            if math.random() < 0.3 then
+                local voicing_types = {'closed', 'open', 'rootless'}
+                LeftHand.voicing_preference = voicing_types[math.random(1, #voicing_types)]
+            end
+
+            local chord_voicing = LeftHand:choose_voicing(chord_pool)
+
+            -- Voice lead to this chord (but use left hand's chosen voicing as a guide)
+            local chord_pitches = find_best_voice_leading(prev_chord_pitches, chord_voicing, theory_weight)
+
+            -- LEFT HAND DECISION: Chord duration based on rhythm pattern
+            local chord_hold_percent
+            if left_rhythm == 'sparse' then
+                chord_hold_percent = math.random(60, 80) -- Long sustain
+                log('  Left hand voicing: ', LeftHand.voicing_preference, ' (sparse, sustained)')
+            elseif left_rhythm == 'moderate' then
+                chord_hold_percent = math.random(45, 60) -- Medium
+                log('  Left hand voicing: ', LeftHand.voicing_preference, ' (moderate)')
+            else -- active
+                chord_hold_percent = math.random(30, 45) -- Short, punchy
+                log('  Left hand voicing: ', LeftHand.voicing_preference, ' (active, staccato)')
             end
 
             local chord_hold = time_per_chord * chord_hold_percent / 100
             local fill_space = time_per_chord - chord_hold
 
-            log('  Chord ', i, ' at ', chord_time, 's, hold: ', chord_hold, 's, fill space: ', fill_space, 's')
+            log('  Chord hold: ', string.format('%.2f', chord_hold), 's, fill space: ', string.format('%.2f', fill_space), 's')
 
             -- Store chord info
             table.insert(chord_times, {
@@ -3766,38 +4141,76 @@ else
                 chord_tones = chord_pool
             })
 
-            -- Generate fill before NEXT chord (not after this one)
+            -- RIGHT HAND THINKING: Should I play a fill?
             if i < NUM_CHORD_CHANGES and fill_space > eighth_note then
-                local fill_start = chord_time + chord_hold
-                local next_root_idx = math.random(1, #scale_notes) -- Preview next chord root
+                -- RIGHT HAND DECISION: Should I play or rest?
+                if RightHand:should_play_fill(fill_space) then
+                    -- Reuse root_idx for next root
+                    root_idx = math.random(1, #scale_notes)
 
-                -- 70% chance of actual fill, 30% silence
-                if math.random() < 0.7 then
-                    local fill_type = FILL_TYPES[math.random(1, #FILL_TYPES)]
+                    -- Create fill entry directly in table to avoid local variables
+                    fills[#fills + 1] = {
+                        type = RightHand:choose_fill_type(fill_space, chord_pool, scale_notes[root_idx]),
+                        time = chord_time + chord_hold,
+                        duration = fill_space * 0.9,
+                        target_root = scale_notes[root_idx],
+                        chord_tones = chord_pool,
+                        dynamics = nil, -- Set below
+                        needs_support = nil -- Set below
+                    }
 
-                    -- Don't allow silence type here - we already have 30% chance of no fill
-                    while fill_type == 'silence' do
-                        fill_type = FILL_TYPES[math.random(1, #FILL_TYPES)]
-                    end
+                    -- Set dynamics
+                    fills[#fills].dynamics = RightHand:choose_dynamics(fills[#fills].type, (i - 1) / NUM_CHORD_CHANGES)
 
-                    log('    Fill type: ', fill_type, ' at ', fill_start, 's for ', fill_space, 's')
+                    -- Check coordination
+                    fills[#fills].needs_support = (function()
+                        local ns, st = HandCoordination.right_requests_support(fills[#fills].type)
+                        if ns then log('    (requesting ', st, ' from left hand)') end
+                        return ns
+                    end)()
 
-                    table.insert(fills, {
-                        type = fill_type,
-                        time = fill_start,
-                        duration = fill_space * 0.9, -- Use 90% to avoid overlap
-                        target_root = scale_notes[next_root_idx],
-                        chord_tones = chord_pool
-                    })
+                    log('  Right hand: "', fills[#fills].type, '" at ', string.format('%.2f', fills[#fills].time), 's')
+                    log('    Intensity: ', string.format('%.2f', RightHand.improvisation_intensity),
+                        ', dynamics: ', fills[#fills].dynamics.base, '±', fills[#fills].dynamics.range)
+
+                    RightHand:remember_phrase(fills[#fills].type)
                 else
-                    log('    Silence (rest)')
+                    log('  Right hand: resting (silence)')
                 end
+
+                -- Check coordination: Does left hand need right hand to simplify?
+                if (function()
+                    local ns, sr = HandCoordination.left_requests_space(left_rhythm)
+                    if ns then
+                        log('  Left hand requests space: ', sr)
+                        RightHand.improvisation_intensity = math.max(0.2, RightHand.improvisation_intensity - 0.2)
+                    end
+                    return ns
+                end)() then end
             end
 
             prev_chord_pitches = chord_pitches
         end
 
-        -- Second pass: Insert chords into MIDI with humanization
+        -- Second pass: Insert LEFT HAND bass notes
+        log('\n=== INSERTING LEFT HAND BASS LINE ===')
+        for _, bass_note in ipairs(bass_notes) do
+            local bass_humanize = (math.random() * 2 - 1) * 0.003 -- ±3ms
+
+            reaper.MIDI_InsertNote(
+                take, false, false,
+                timeToPPQ(bass_note.time + bass_humanize),
+                timeToPPQ(bass_note.time + bass_note.duration),
+                num_voices, -- Use a separate channel for bass
+                bass_note.pitch,
+                bass_note.velocity,
+                false
+            )
+            log('  Bass note: ', bass_note.type, ' at ', string.format('%.2f', bass_note.time), 's')
+        end
+
+        -- Third pass: Insert LEFT HAND chords with humanization
+        log('\n=== INSERTING LEFT HAND CHORDS ===')
         for _, chord_event in ipairs(chord_times) do
             -- Slight timing offset per chord for groove
             local chord_humanize = (math.random() * 2 - 1) * 0.005 -- ±5ms
@@ -3825,9 +4238,13 @@ else
             end
         end
 
-        -- Third pass: Insert fills between chords with humanization
+        -- Fourth pass: Insert RIGHT HAND fills with humanization
+        log('\n=== INSERTING RIGHT HAND FILLS ===')
         for _, fill_event in ipairs(fills) do
             local fill_notes = {}
+
+            -- Apply right hand's dynamic choices
+            local dyn = fill_event.dynamics or {base = 65, range = 20}
 
             -- Original fill types
             if fill_event.type == 'arpeggio_up' then
@@ -3926,11 +4343,25 @@ else
                 store_motif(pitches)
             end
 
-            -- Insert fill notes with timing humanization
-            for _, note in ipairs(fill_notes) do
+            -- Insert fill notes with timing humanization and RIGHT HAND dynamics
+            for note_idx, note in ipairs(fill_notes) do
                 -- Add subtle timing variation (±10ms)
                 local humanize_offset = (math.random() * 2 - 1) * 0.010
                 local note_time = note.time + humanize_offset
+
+                -- Apply right hand's chosen dynamics instead of fill's default velocity
+                local position_in_fill = (note_idx - 1) / math.max(1, #fill_notes - 1)
+                local half_range = math.floor(dyn.range / 2)
+                local velocity = dyn.base + math.random(-half_range, half_range)
+
+                -- Slight dynamic curve within phrase
+                if position_in_fill < 0.3 then
+                    velocity = velocity - 5 -- Start softer
+                elseif position_in_fill > 0.7 then
+                    velocity = velocity + 5 -- End stronger
+                end
+
+                velocity = math.floor(clamp(velocity, 40, 110))
 
                 -- Use voice from note if specified (for polyphonic fills), otherwise channel 0
                 local channel = note.voice or 0
@@ -3941,13 +4372,16 @@ else
                     timeToPPQ(note_time + note.duration),
                     channel,
                     note.pitch,
-                    note.velocity,
+                    velocity, -- Use right hand's dynamic choice
                     false
                 )
             end
         end
 
-        log('Generated ', NUM_CHORD_CHANGES, ' chords with ', #fills, ' fills')
+        log('\n=== GENERATION COMPLETE ===')
+        log('Generated ', NUM_CHORD_CHANGES, ' chords with ', #fills, ' fills and ', #bass_notes, ' bass notes')
+        log('Left hand energy range: ', string.format('%.2f', LeftHand.energy_level))
+        log('Right hand intensity range: ', string.format('%.2f', RightHand.improvisation_intensity))
     end
 end
 

@@ -771,11 +771,12 @@ poly_mode = 'free'
 theory_weight = defaults.theory_weight
 
 if defaults.num_voices > 1 then
-    poly_modes = {"Free (Creative)", "Harmonic (Chords)", "Voice Leading (Counterpoint)", "Pianist/Guitarist (Chords + Fills)", "Zach Hill Polyphonic (Chaotic Virtuoso)"}
+    poly_modes = {"Free (Creative)", "Harmonic (Chords)", "Voice Leading (Counterpoint)", "Pianist/Guitarist (Chords + Fills)", "Zach Hill Polyphonic (Chaotic Virtuoso)", "Synth Sequencer (House/Techno)"}
     default_poly_idx = 1
     if defaults.poly_mode == 'harmonic' then default_poly_idx = 2
     elseif defaults.poly_mode == 'voice_leading' then default_poly_idx = 3
     elseif defaults.poly_mode == 'pianist' then default_poly_idx = 4
+    elseif defaults.poly_mode == 'synth_seq' then default_poly_idx = 6
     end
 
     poly_choice = show_popup_menu(poly_modes, default_poly_idx)
@@ -786,6 +787,7 @@ if defaults.num_voices > 1 then
     elseif poly_choice == 3 then poly_mode = 'voice_leading'
     elseif poly_choice == 4 then poly_mode = 'pianist'
     elseif poly_choice == 5 then poly_mode = 'zach_hill'
+    elseif poly_choice == 6 then poly_mode = 'synth_seq'
     end
 end
 
@@ -4555,6 +4557,147 @@ else
         log('Generated ', NUM_CHORD_CHANGES, ' chords with ', #fills, ' fills and ', #bass_notes, ' bass notes')
         log('Left hand energy range: ', string.format('%.2f', LeftHand.energy_level))
         log('Right hand intensity range: ', string.format('%.2f', RightHand.improvisation_intensity))
+
+    -- =============================
+    -- Mode 6: SYNTH SEQUENCER - House/Techno/Electro
+    -- Step-sequenced feel with repetitive rhythms, melodic variation
+    -- Suitable for basslines, leads, and arpeggios
+    -- =============================
+    elseif poly_mode == 'synth_seq' then
+        log('Synth Sequencer Mode - House/Techno/Electro')
+
+        -- Sequencer style: bassline, lead, or arpeggio
+        -- Infer from register: low=bass, mid=lead, high=arp
+        local avg_note = scale_notes[math.floor(#scale_notes / 2)]
+        local seq_style
+        if avg_note < 48 then seq_style = 'bass'
+        elseif avg_note < 72 then seq_style = 'lead'
+        else seq_style = 'arp' end
+
+        -- 16th note grid for step sequencer feel
+        local sixteenth = quarter_note / 4
+        local pattern_len = 16 -- One bar pattern (16 steps)
+        local num_patterns = measures * 4 -- Four patterns per measure
+
+        -- Pattern parameters by style
+        local note_density, range_limit, rest_chance, vel_base, vel_range
+        if seq_style == 'bass' then
+            note_density = 0.6 -- Sparser, groove-based
+            range_limit = math.floor(5) -- Stay within 5 scale degrees
+            rest_chance = 0.35 -- More space in basslines
+            vel_base, vel_range = 95, 20 -- Punchy
+        elseif seq_style == 'lead' then
+            note_density = 0.7 -- Medium density
+            range_limit = math.floor(9) -- More melodic freedom
+            rest_chance = 0.25 -- Some syncopation
+            vel_base, vel_range = 85, 25 -- Dynamic variation
+        else -- arpeggio
+            note_density = 0.85 -- Dense, flowing
+            range_limit = math.floor(12) -- Full range
+            rest_chance = 0.15 -- Continuous feel
+            vel_base, vel_range = 75, 20 -- Consistent
+        end
+
+        -- Generate base pattern (will repeat with variations)
+        local base_pattern = {}
+        local active_count = 0
+        for step = 1, pattern_len do
+            if math.random() < note_density then
+                base_pattern[step] = {active = true, offset = 0}
+                active_count = active_count + 1
+            else
+                base_pattern[step] = {active = false}
+            end
+        end
+
+        -- Ensure at least some activity
+        if active_count < 4 then
+            base_pattern[1] = {active = true, offset = 0}
+            base_pattern[5] = {active = true, offset = 0}
+            base_pattern[9] = {active = true, offset = 0}
+            base_pattern[13] = {active = true, offset = 0}
+        end
+
+        -- Generate pitched sequences
+        local current_time = start_time
+        local current_idx = math.random(1, math.min(range_limit, #scale_notes))
+
+        for pattern_num = 1, num_patterns do
+            -- Decide variation level for this pattern
+            local variation = math.random()
+            local pitch_shift = 0
+
+            if variation < 0.7 then
+                -- Repeat base pattern (70% of time - REPETITIVE)
+                pitch_shift = 0
+            elseif variation < 0.9 then
+                -- Transpose pattern up/down (20%)
+                pitch_shift = choose_random({-2, -1, 1, 2})
+            else
+                -- Rhythmic variation (10%)
+                for step = 1, pattern_len do
+                    if base_pattern[step].active and math.random() < 0.5 then
+                        base_pattern[step].active = false
+                    elseif not base_pattern[step].active and math.random() < 0.3 then
+                        base_pattern[step].active = true
+                    end
+                end
+            end
+
+            -- Generate notes from pattern
+            for step = 1, pattern_len do
+                local step_time = current_time + (step - 1) * sixteenth
+
+                if base_pattern[step].active and math.random() > rest_chance then
+                    -- Melodic movement: small steps for repetitive feel
+                    local move
+                    if seq_style == 'bass' then
+                        -- Bass: root-fifth motion, occasional passing tones
+                        move = choose_random({0, 0, 0, 4, 4, 1, -1}) -- Bias to root/fifth
+                    elseif seq_style == 'lead' then
+                        -- Lead: stepwise with occasional leaps
+                        if math.random() < 0.7 then
+                            move = choose_random({-1, 0, 1}) -- Stepwise
+                        else
+                            move = choose_random({-3, -2, 2, 3}) -- Small leaps
+                        end
+                    else -- arp
+                        -- Arpeggio: systematic triadic motion
+                        move = choose_random({-4, -2, 0, 2, 4}) -- Triadic intervals
+                    end
+
+                    current_idx = clamp(current_idx + move + pitch_shift, 1, math.min(range_limit, #scale_notes))
+                    local pitch = scale_notes[current_idx]
+
+                    -- Duration: mostly 16ths, occasional 8th notes
+                    local dur
+                    if seq_style == 'bass' and math.random() < 0.3 then
+                        dur = sixteenth * 0.5 -- Short stabs
+                    elseif math.random() < 0.15 then
+                        dur = sixteenth * 2 -- Occasional longer note
+                    else
+                        dur = sixteenth * 0.9 -- Standard 16th (slight gap)
+                    end
+
+                    -- Velocity variation
+                    local vel = vel_base + math.random(-math.floor(vel_range/2), math.floor(vel_range/2))
+                    -- Accent certain steps (1, 5, 9, 13 = downbeats)
+                    if step % 4 == 1 then vel = vel + 10 end
+                    vel = clamp(math.floor(vel), 40, 120)
+
+                    reaper.MIDI_InsertNote(
+                        take, false, false,
+                        timeToPPQ(step_time),
+                        timeToPPQ(step_time + dur),
+                        0, pitch, vel, false
+                    )
+                end
+            end
+
+            current_time = current_time + pattern_len * sixteenth
+        end
+
+        log('Synth Sequencer: Generated ', num_patterns, ' patterns in ', seq_style, ' style')
     end
 end
 

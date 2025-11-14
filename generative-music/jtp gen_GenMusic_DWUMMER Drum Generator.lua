@@ -1,8 +1,8 @@
 -- @description jtp gen_GenMusic_DWUMMER Drum Generator
 -- @author James
--- @version 3.0
+-- @version 3.1
 -- @about
---   # DWUMMER Drum Generator v3.0 - Musical Intelligence & Expressive Performance
+--   # DWUMMER Drum Generator v3.1 - Musical Intelligence & Expressive Performance
 --   Complete implementation of Phases 0-4 of the DWUMMER development plan.
 --
 --   Phase 0: Initialization, deterministic seed management, time conversion, drum map lookup
@@ -10,7 +10,7 @@
 --   Phase 2: Core Rhythm Engine - Euclidean rhythm generation for multiple voices
 --   Phase 3: Dynamics and Structure - Velocity humanization, swing, ghost notes, fills
 --
---   **Phase 4: Musical Intelligence & Expressive Performance** (NEW)
+--   **Phase 4: Musical Intelligence & Expressive Performance**
 --   - 4.1: Motif-Based Groove Development - Recurring rhythmic ideas with variations
 --   - 4.2: Dynamic Phrasing & Section Awareness - Auto-adapting groove based on song structure
 --   - 4.3: Call-and-Response & Interaction - Voice interplay and rhythmic conversation
@@ -18,6 +18,14 @@
 --   - 4.5: Intelligent Fill Placement & Variation - Musically appropriate fills with variety
 --   - 4.6: Adaptive Dynamics & Microtiming - Natural push/pull and dynamic swells
 --   - 4.7: Groove Surprise & "Mistake" Engine - Human unpredictability
+--
+--   **v3.1 NEW: Zach Hill Mode - Chaotic Technical Patterns**
+--   - Adaptive burst patterns, double strokes, and paradiddles
+--   - Physical limb constraint simulation for realistic drumming
+--   - Focused riff generation with kit subsets
+--   - Dynamic velocity based on timing and hand/foot movement
+--   - Persistent adaptive parameters (learns from usage patterns)
+--   - Phrase logic: 3x repeating riff then a fill (Zach-esque)
 
 if not reaper then return end
 
@@ -73,6 +81,9 @@ local DrumMap = {
     CRASH = 49,
     SIDE_STICK = 37,
 }
+
+-- Note: HAT_PEDAL for Zach Hill mode (hi-hat pedal articulation)
+local HAT_PEDAL = 44
 
 -- Phase 2.1: Euclidean Rhythm Algorithm
 -- Generates a Euclidean rhythm pattern
@@ -1056,7 +1067,11 @@ end
 
 -- Show mode selection dropdown menu
 function show_mode_selection()
-    local mode_items = {"Random (auto-generate all parameters)", "Manual (configure your own settings)"}
+    local mode_items = {
+        "Random (auto-generate all parameters)",
+        "Manual (configure your own settings)",
+        "Zach Hill Mode (chaotic, technical drum patterns)"
+    }
 
     -- Position menu at mouse cursor
     gfx.x, gfx.y = reaper.GetMousePosition()
@@ -1064,6 +1079,645 @@ function show_mode_selection()
 
     -- Returns 0 if cancelled, or 1-based index of selection
     return choice
+end
+
+-- =============================
+-- ZACH HILL MODE: Chaotic Technical Drum Generator
+-- =============================
+
+-- Adaptive parameters for Zach Hill mode (persistent via ExtState)
+local function GetZachParam(key, default)
+    local val = reaper.GetExtState("jtp_gen_dwummer_zach", key)
+    if val == "" then return default end
+    return tonumber(val)
+end
+
+local function SetZachParam(key, value)
+    reaper.SetExtState("jtp_gen_dwummer_zach", key, tostring(value), true)
+end
+
+-- Initialize Zach Hill adaptive parameters
+local ZACH_BURST_CHANCE = GetZachParam("burst_chance", 0.250)
+local ZACH_DOUBLE_STROKE_CHANCE = GetZachParam("double_stroke_chance", 0.250)
+local ZACH_PARADIDDLE_CHANCE = GetZachParam("paradiddle_chance", 0.250)
+local ZACH_FOCUSED_RIFF_CHANCE = GetZachParam("focused_riff_chance", 0.300)
+local ZACH_ANCHOR_DOWNBEAT_CHANCE = GetZachParam("anchor_downbeat_chance", 0.300)
+local ZACH_FOOT_PEDAL_QUARTER_CHANCE = GetZachParam("foot_pedal_quarter_chance", 0.300)
+local ZACH_RANDOM_BEAT_ACCENT_CHANCE = GetZachParam("random_beat_accent_chance", 0.600)
+local ZACH_SUBDIVS_MAX = GetZachParam("subdivs_max", 2)
+
+-- Zach Hill phrase behavior (3 repeats then fill)
+local ZACH_PHRASE_LENGTH = GetZachParam("phrase_length", 4) -- bars per phrase
+local ZACH_REPEAT_BARS = GetZachParam("phrase_repeat_bars", 3) -- repeating riff bars before fill
+
+-- Density and layering controls
+local ZACH_TEXTURE_LAYER_CHANCE = GetZachParam("texture_layer_chance", 0.85) -- chance to add 8th-note hats/ride
+local ZACH_LAYER_CYMBAL_CHANCE = GetZachParam("layer_cymbal_chance", 0.55) -- chance to layer cymbal on a stroke
+local ZACH_KICK_UNDER_CHANCE = GetZachParam("kick_under_chance", 0.35) -- chance to add kick under a hand stroke
+local ZACH_MIN_NOTES_PER_MEASURE = GetZachParam("min_notes_per_measure", 12)
+
+-- Zach Hill mode drum map (adapted to DWUMMER's MIDI mapping)
+local ZachDrumMap = {
+    {note = DrumMap.KICK, prob = 0.38},
+    {note = DrumMap.SNARE, prob = 0.38},
+    {note = DrumMap.TOM_HIGH, prob = 0.20},
+    {note = DrumMap.TOM_MID, prob = 0.20},
+    {note = DrumMap.TOM_LOW, prob = 0.10},
+    {note = DrumMap.HIHAT_CLOSED, prob = 0.15},
+    {note = DrumMap.HIHAT_OPEN, prob = 0.05},
+    {note = DrumMap.CRASH, prob = 0.007},
+    {note = DrumMap.RIDE, prob = 0.007},
+}
+
+-- Zach Hill mode settings
+local ZACH_PPQ = 960
+local ZACH_SUBDIVS_MIN = 1
+local ZACH_BURST_NOTES = 8
+local ZACH_HUMANIZE_MS = 7
+local ZACH_VEL_MIN = 7
+local ZACH_VEL_MAX = 110
+local ZACH_SUSTAIN_MODE = true
+local ZACH_SUSTAIN_FACTOR = 0.9
+local ZACH_MIN_FOOT_INTERVAL_SECS = 0.06
+local ZACH_MIN_HAND_INTERVAL_SECS = 0.01
+local ZACH_FOOT_PEDAL_VEL_MIN = 60
+local ZACH_FOOT_PEDAL_VEL_MAX = 90
+
+-- Hand movement times for physical realism
+local function zachMoveTime(same, diff)
+    return function(from, to)
+        if from == to then return same else return diff end
+    end
+end
+
+local zachTimeFn = zachMoveTime(0.01, 0.06)
+
+local zachMovementTime = {
+    [DrumMap.SNARE] = {
+        [DrumMap.SNARE]=zachTimeFn(DrumMap.SNARE, DrumMap.SNARE),
+        [DrumMap.TOM_HIGH]=zachTimeFn(DrumMap.SNARE, DrumMap.TOM_HIGH),
+        [DrumMap.TOM_MID]=zachTimeFn(DrumMap.SNARE, DrumMap.TOM_MID),
+        [DrumMap.TOM_LOW]=zachTimeFn(DrumMap.SNARE, DrumMap.TOM_LOW),
+        [DrumMap.HIHAT_CLOSED]=zachTimeFn(DrumMap.SNARE, DrumMap.HIHAT_CLOSED),
+        [DrumMap.HIHAT_OPEN]=zachTimeFn(DrumMap.SNARE, DrumMap.HIHAT_OPEN),
+        [DrumMap.CRASH]=zachTimeFn(DrumMap.SNARE, DrumMap.CRASH),
+        [DrumMap.RIDE]=zachTimeFn(DrumMap.SNARE, DrumMap.RIDE)
+    },
+    [DrumMap.TOM_HIGH] = {
+        [DrumMap.SNARE]=zachTimeFn(DrumMap.TOM_HIGH, DrumMap.SNARE),
+        [DrumMap.TOM_HIGH]=zachTimeFn(DrumMap.TOM_HIGH, DrumMap.TOM_HIGH),
+        [DrumMap.TOM_MID]=zachTimeFn(DrumMap.TOM_HIGH, DrumMap.TOM_MID),
+        [DrumMap.TOM_LOW]=zachTimeFn(DrumMap.TOM_HIGH, DrumMap.TOM_LOW),
+        [DrumMap.HIHAT_CLOSED]=zachTimeFn(DrumMap.TOM_HIGH, DrumMap.HIHAT_CLOSED),
+        [DrumMap.HIHAT_OPEN]=zachTimeFn(DrumMap.TOM_HIGH, DrumMap.HIHAT_OPEN),
+        [DrumMap.CRASH]=zachTimeFn(DrumMap.TOM_HIGH, DrumMap.CRASH),
+        [DrumMap.RIDE]=zachTimeFn(DrumMap.TOM_HIGH, DrumMap.RIDE)
+    },
+    [DrumMap.TOM_MID] = {
+        [DrumMap.SNARE]=zachTimeFn(DrumMap.TOM_MID, DrumMap.SNARE),
+        [DrumMap.TOM_HIGH]=zachTimeFn(DrumMap.TOM_MID, DrumMap.TOM_HIGH),
+        [DrumMap.TOM_MID]=zachTimeFn(DrumMap.TOM_MID, DrumMap.TOM_MID),
+        [DrumMap.TOM_LOW]=zachTimeFn(DrumMap.TOM_MID, DrumMap.TOM_LOW),
+        [DrumMap.HIHAT_CLOSED]=zachTimeFn(DrumMap.TOM_MID, DrumMap.HIHAT_CLOSED),
+        [DrumMap.HIHAT_OPEN]=zachTimeFn(DrumMap.TOM_MID, DrumMap.HIHAT_OPEN),
+        [DrumMap.CRASH]=zachTimeFn(DrumMap.TOM_MID, DrumMap.CRASH),
+        [DrumMap.RIDE]=zachTimeFn(DrumMap.TOM_MID, DrumMap.RIDE)
+    },
+    [DrumMap.TOM_LOW] = {
+        [DrumMap.SNARE]=zachTimeFn(DrumMap.TOM_LOW, DrumMap.SNARE),
+        [DrumMap.TOM_HIGH]=zachTimeFn(DrumMap.TOM_LOW, DrumMap.TOM_HIGH),
+        [DrumMap.TOM_MID]=zachTimeFn(DrumMap.TOM_LOW, DrumMap.TOM_MID),
+        [DrumMap.TOM_LOW]=zachTimeFn(DrumMap.TOM_LOW, DrumMap.TOM_LOW),
+        [DrumMap.HIHAT_CLOSED]=zachTimeFn(DrumMap.TOM_LOW, DrumMap.HIHAT_CLOSED),
+        [DrumMap.HIHAT_OPEN]=zachTimeFn(DrumMap.TOM_LOW, DrumMap.HIHAT_OPEN),
+        [DrumMap.CRASH]=zachTimeFn(DrumMap.TOM_LOW, DrumMap.CRASH),
+        [DrumMap.RIDE]=zachTimeFn(DrumMap.TOM_LOW, DrumMap.RIDE)
+    },
+    [DrumMap.HIHAT_CLOSED] = {
+        [DrumMap.SNARE]=zachTimeFn(DrumMap.HIHAT_CLOSED, DrumMap.SNARE),
+        [DrumMap.TOM_HIGH]=zachTimeFn(DrumMap.HIHAT_CLOSED, DrumMap.TOM_HIGH),
+        [DrumMap.TOM_MID]=zachTimeFn(DrumMap.HIHAT_CLOSED, DrumMap.TOM_MID),
+        [DrumMap.TOM_LOW]=zachTimeFn(DrumMap.HIHAT_CLOSED, DrumMap.TOM_LOW),
+        [DrumMap.HIHAT_CLOSED]=zachTimeFn(DrumMap.HIHAT_CLOSED, DrumMap.HIHAT_CLOSED),
+        [DrumMap.HIHAT_OPEN]=zachTimeFn(DrumMap.HIHAT_CLOSED, DrumMap.HIHAT_OPEN),
+        [DrumMap.CRASH]=zachTimeFn(DrumMap.HIHAT_CLOSED, DrumMap.CRASH),
+        [DrumMap.RIDE]=zachTimeFn(DrumMap.HIHAT_CLOSED, DrumMap.RIDE)
+    },
+    [DrumMap.HIHAT_OPEN] = {
+        [DrumMap.SNARE]=zachTimeFn(DrumMap.HIHAT_OPEN, DrumMap.SNARE),
+        [DrumMap.TOM_HIGH]=zachTimeFn(DrumMap.HIHAT_OPEN, DrumMap.TOM_HIGH),
+        [DrumMap.TOM_MID]=zachTimeFn(DrumMap.HIHAT_OPEN, DrumMap.TOM_MID),
+        [DrumMap.TOM_LOW]=zachTimeFn(DrumMap.HIHAT_OPEN, DrumMap.TOM_LOW),
+        [DrumMap.HIHAT_CLOSED]=zachTimeFn(DrumMap.HIHAT_OPEN, DrumMap.HIHAT_CLOSED),
+        [DrumMap.HIHAT_OPEN]=zachTimeFn(DrumMap.HIHAT_OPEN, DrumMap.HIHAT_OPEN),
+        [DrumMap.CRASH]=zachTimeFn(DrumMap.HIHAT_OPEN, DrumMap.CRASH),
+        [DrumMap.RIDE]=zachTimeFn(DrumMap.HIHAT_OPEN, DrumMap.RIDE)
+    },
+    [DrumMap.CRASH] = {
+        [DrumMap.SNARE]=zachTimeFn(DrumMap.CRASH, DrumMap.SNARE),
+        [DrumMap.TOM_HIGH]=zachTimeFn(DrumMap.CRASH, DrumMap.TOM_HIGH),
+        [DrumMap.TOM_MID]=zachTimeFn(DrumMap.CRASH, DrumMap.TOM_MID),
+        [DrumMap.TOM_LOW]=zachTimeFn(DrumMap.CRASH, DrumMap.TOM_LOW),
+        [DrumMap.HIHAT_CLOSED]=zachTimeFn(DrumMap.CRASH, DrumMap.HIHAT_CLOSED),
+        [DrumMap.HIHAT_OPEN]=zachTimeFn(DrumMap.CRASH, DrumMap.HIHAT_OPEN),
+        [DrumMap.CRASH]=zachTimeFn(DrumMap.CRASH, DrumMap.CRASH),
+        [DrumMap.RIDE]=zachTimeFn(DrumMap.CRASH, DrumMap.RIDE)
+    },
+    [DrumMap.RIDE] = {
+        [DrumMap.SNARE]=zachTimeFn(DrumMap.RIDE, DrumMap.SNARE),
+        [DrumMap.TOM_HIGH]=zachTimeFn(DrumMap.RIDE, DrumMap.TOM_HIGH),
+        [DrumMap.TOM_MID]=zachTimeFn(DrumMap.RIDE, DrumMap.TOM_MID),
+        [DrumMap.TOM_LOW]=zachTimeFn(DrumMap.RIDE, DrumMap.TOM_LOW),
+        [DrumMap.HIHAT_CLOSED]=zachTimeFn(DrumMap.RIDE, DrumMap.HIHAT_CLOSED),
+        [DrumMap.HIHAT_OPEN]=zachTimeFn(DrumMap.RIDE, DrumMap.HIHAT_OPEN),
+        [DrumMap.CRASH]=zachTimeFn(DrumMap.RIDE, DrumMap.CRASH),
+        [DrumMap.RIDE]=zachTimeFn(DrumMap.RIDE, DrumMap.RIDE)
+    },
+}
+
+-- Limb state tracking for physical realism
+local zachLimbState = {
+    RF = { lastNoteTime = nil, lastPiece = DrumMap.KICK },
+    LF = { lastNoteTime = nil, lastPiece = HAT_PEDAL },
+    RH = { lastNoteTime = nil, lastPiece = DrumMap.SNARE },
+    LH = { lastNoteTime = nil, lastPiece = DrumMap.SNARE },
+}
+
+local zachGlobalPPQStart = 0
+local zachCurrentMeasureAccents = {}
+local zachCurrentMeasureStartPPQ = nil
+local zachGlobalMeasureLenPPQ = nil
+
+-- Zach Hill helper functions
+local function zachRandomRange(minVal, maxVal)
+    return math.floor(math.random() * (maxVal - minVal + 1)) + minVal
+end
+
+local function zachChooseDrum()
+    local r = math.random()
+    local cumulative = 0
+    for _, d in ipairs(ZachDrumMap) do
+        cumulative = cumulative + d.prob
+        if r <= cumulative then
+            return d.note
+        end
+    end
+    return ZachDrumMap[#ZachDrumMap].note
+end
+
+local function zachPickLimbForNote(note)
+    if note == DrumMap.KICK then
+        return "RF"
+    elseif note == HAT_PEDAL then
+        return "LF"
+    else
+        return (math.random() < 0.5) and "RH" or "LH"
+    end
+end
+
+local function zachCanLimbPlay(limbID, note, requestedTime)
+    local st = zachLimbState[limbID]
+    if not st then return false end
+    local lastTime = st.lastNoteTime
+    local lastPiece = st.lastPiece
+    if not lastTime then return true end
+    local dt = requestedTime - lastTime
+    if dt < 0 then return false end
+    if limbID == "RF" or limbID == "LF" then
+        return dt >= ZACH_MIN_FOOT_INTERVAL_SECS
+    end
+    if dt < ZACH_MIN_HAND_INTERVAL_SECS then return false end
+    local mtime = 0.01
+    if zachMovementTime[lastPiece] and zachMovementTime[lastPiece][note] then
+        mtime = zachMovementTime[lastPiece][note]
+    end
+    return dt >= mtime
+end
+
+local function zachGetDynamicVelocity(limbID, note, finalTime, notePPQ)
+    local offFromStart = notePPQ - zachGlobalPPQStart
+    local onQuarter = (offFromStart >= 0) and ((offFromStart % ZACH_PPQ) == 0)
+    if onQuarter then return zachRandomRange(ZACH_VEL_MIN, ZACH_VEL_MAX) end
+
+    local st = zachLimbState[limbID]
+    local dt = st.lastNoteTime and (finalTime - st.lastNoteTime) or 999
+    local baseMin, baseMax
+    if dt < 0.03 then
+        baseMin, baseMax = 30, 60
+    elseif dt < 0.06 then
+        baseMin, baseMax = 40, 80
+    else
+        baseMin, baseMax = 50, 110
+    end
+
+    local accentFactor = 0
+    if zachCurrentMeasureAccents and zachCurrentMeasureStartPPQ and
+       notePPQ >= zachCurrentMeasureStartPPQ and
+       notePPQ < (zachCurrentMeasureStartPPQ + zachGlobalMeasureLenPPQ) then
+        local accentWindow = ZACH_PPQ / 4
+        for _, accentPPQ in ipairs(zachCurrentMeasureAccents) do
+            local diff = math.abs(notePPQ - accentPPQ)
+            local candidate = (accentWindow - diff) / accentWindow
+            if candidate > accentFactor then accentFactor = candidate end
+        end
+    end
+
+    local bonus = math.floor(accentFactor * 20)
+    local finalMin = math.min(ZACH_VEL_MAX, baseMin + bonus)
+    local finalMax = math.min(ZACH_VEL_MAX, baseMax + bonus)
+    return zachRandomRange(finalMin, finalMax)
+end
+
+local function zachInsertNote(take, ppqPos, note, overrideVelMin, overrideVelMax, noteDurationTicks)
+    local noteTime = reaper.MIDI_GetProjTimeFromPPQPos(take, ppqPos)
+    local humanizeOffsetSec = (math.random() * 2 - 1) * (ZACH_HUMANIZE_MS / 1000)
+    local finalTime = noteTime + humanizeOffsetSec
+    local limb = zachPickLimbForNote(note)
+    if not zachCanLimbPlay(limb, note, finalTime) then return end
+
+    local noteVelocity
+    if overrideVelMin and overrideVelMax then
+        local baseVel = zachRandomRange(overrideVelMin, overrideVelMax)
+        local dev = zachRandomRange(-5, 5)
+        noteVelocity = math.min(math.max(baseVel + dev, ZACH_VEL_MIN), ZACH_VEL_MAX)
+    else
+        local ppqWithOffset = reaper.MIDI_GetPPQPosFromProjTime(take, finalTime)
+        noteVelocity = zachGetDynamicVelocity(limb, note, finalTime, ppqWithOffset)
+    end
+
+    local ppqWithOffset = reaper.MIDI_GetPPQPosFromProjTime(take, finalTime)
+    local noteOffPPQ = noteDurationTicks and (ppqWithOffset + noteDurationTicks) or (ppqWithOffset + 1)
+    reaper.MIDI_InsertNote(take, false, false, ppqWithOffset, noteOffPPQ, 0, note, noteVelocity, false)
+    zachLimbState[limb].lastNoteTime = finalTime
+    zachLimbState[limb].lastPiece = note
+end
+
+local function zachInsertDoubleStroke(take, basePPQ, note, spacingTicks)
+    local duration = ZACH_SUSTAIN_MODE and math.floor(spacingTicks * ZACH_SUSTAIN_FACTOR) or nil
+    zachInsertNote(take, basePPQ, note, nil, nil, duration)
+    zachInsertNote(take, basePPQ + spacingTicks, note, nil, nil, duration)
+end
+
+local function zachInsertParadiddle(take, startPPQ, spacingTicks, kitFocus)
+    local function pickNote()
+        if kitFocus and #kitFocus > 0 then
+            return kitFocus[zachRandomRange(1, #kitFocus)]
+        else
+            return zachChooseDrum()
+        end
+    end
+
+    local strokes = { pickNote(), pickNote(), pickNote(), pickNote(),
+                      pickNote(), pickNote(), pickNote(), pickNote() }
+    local duration = ZACH_SUSTAIN_MODE and math.floor(spacingTicks * ZACH_SUSTAIN_FACTOR) or nil
+    for i, n in ipairs(strokes) do
+        local strokePPQ = startPPQ + (i-1)*spacingTicks
+        zachInsertNote(take, strokePPQ, n, nil, nil, duration)
+    end
+end
+
+local function zachChooseKitSubset(size)
+    local subset = {}
+    local pool = {}
+    for _, d in ipairs(ZachDrumMap) do table.insert(pool, d.note) end
+    for i = #pool, 1, -1 do
+        if pool[i] == DrumMap.KICK or pool[i] == HAT_PEDAL then table.remove(pool, i) end
+    end
+    for i = 1, size do
+        if #pool == 0 then break end
+        local idx = zachRandomRange(1, #pool)
+        table.insert(subset, pool[idx])
+        table.remove(pool, idx)
+    end
+    return subset
+end
+
+local function zachInsertFocusedRiff(take, startPPQ, measureEndPPQ, kitFocus)
+    if not kitFocus or #kitFocus < 1 then kitFocus = zachChooseKitSubset(zachRandomRange(2, 3)) end
+    local patternLength = zachRandomRange(3, 5)
+    local totalSpace = measureEndPPQ - startPPQ
+    local spacing = math.floor(totalSpace / (patternLength * 2))
+    local duration = ZACH_SUSTAIN_MODE and math.floor(spacing * ZACH_SUSTAIN_FACTOR) or nil
+    local pos = startPPQ
+    while pos < measureEndPPQ do
+        for p = 1, patternLength do
+            local note = kitFocus[zachRandomRange(1, #kitFocus)]
+            local insertPos = pos + (p-1)*spacing
+            if insertPos >= measureEndPPQ then break end
+            zachInsertNote(take, insertPos, note, nil, nil, duration)
+        end
+        pos = pos + (patternLength * spacing)
+    end
+end
+
+-- Generate a repeating riff spec to reuse over the phrase
+local function zachGenerateRiffSpec()
+    return {
+        kitFocus = zachChooseKitSubset(zachRandomRange(2, 3)),
+        patternLength = zachRandomRange(3, 5)
+    }
+end
+
+local function zachInsertFocusedRiffWithSpec(take, startPPQ, measureEndPPQ, riffSpec)
+    local kitFocus = riffSpec.kitFocus
+    local patternLength = riffSpec.patternLength
+    if not kitFocus or #kitFocus < 1 then
+        kitFocus = zachChooseKitSubset(zachRandomRange(2, 3))
+    end
+    local totalSpace = measureEndPPQ - startPPQ
+    -- Increase density: 3 strokes per pattern step instead of 2
+    local spacing = math.max(1, math.floor(totalSpace / (patternLength * 3)))
+    local duration = ZACH_SUSTAIN_MODE and math.floor(spacing * ZACH_SUSTAIN_FACTOR) or nil
+    local pos = startPPQ
+    while pos < measureEndPPQ do
+        for p = 1, patternLength do
+            local note = kitFocus[zachRandomRange(1, #kitFocus)]
+            local insertPos = pos + (p-1)*spacing
+            if insertPos >= measureEndPPQ then break end
+            -- Primary stroke
+            zachInsertNote(take, insertPos, note, nil, nil, duration)
+            -- Optional interstitial stroke to avoid linearity
+            if math.random() < 0.5 then
+                local interPos = insertPos + math.floor(spacing * 0.5)
+                if interPos < measureEndPPQ then
+                    local interNote = kitFocus[zachRandomRange(1, #kitFocus)]
+                    zachInsertNote(take, interPos, interNote, nil, nil, math.floor(duration * 0.8))
+                end
+            end
+            -- Layering: cymbal on top
+            if math.random() < ZACH_LAYER_CYMBAL_CHANCE then
+                local cym = (math.random() < 0.6) and DrumMap.HIHAT_CLOSED or ((math.random() < 0.5) and DrumMap.RIDE or DrumMap.HIHAT_OPEN)
+                zachInsertNote(take, insertPos, cym, 70, 105, duration)
+            end
+            -- Layering: kick under hand stroke
+            if math.random() < ZACH_KICK_UNDER_CHANCE then
+                zachInsertNote(take, insertPos, DrumMap.KICK, 65, 100, duration)
+            end
+        end
+        pos = pos + (patternLength * spacing)
+    end
+end
+
+-- Chaotic fill measure: heavier tom/snare activity and end crash
+local function zachInsertChaosFill(take, measureStartPPQ, measureEndPPQ, timeSig_num)
+    -- First half: light scaffolding (kick on 1, optional hats)
+    local durationQ = ZACH_SUSTAIN_MODE and math.floor(ZACH_PPQ * ZACH_SUSTAIN_FACTOR) or nil
+    zachInsertNote(take, measureStartPPQ, DrumMap.KICK, nil, nil, durationQ)
+    for b = 2, timeSig_num - 1 do
+        local quarterPPQ = measureStartPPQ + (b-1)*ZACH_PPQ
+        if quarterPPQ >= measureEndPPQ then break end
+        if math.random() < 0.5 then
+            zachInsertNote(take, quarterPPQ, HAT_PEDAL, ZACH_FOOT_PEDAL_VEL_MIN, ZACH_FOOT_PEDAL_VEL_MAX, durationQ)
+        end
+    end
+
+    -- Second half: bursts/paradiddles across toms and snare
+    local fillStart = measureStartPPQ + math.floor((timeSig_num >= 4 and 3 or math.max(1, timeSig_num-1)) * ZACH_PPQ)
+    if fillStart >= measureEndPPQ then fillStart = measureStartPPQ + math.floor(ZACH_PPQ * 0.5) end
+    local cur = fillStart
+    while cur < measureEndPPQ do
+        local remaining = measureEndPPQ - cur
+        local subdivs = math.max(3, ZACH_SUBDIVS_MAX)
+        local ticksPerSub = math.max(1, math.floor(ZACH_PPQ / subdivs))
+        if math.random() < 0.6 then
+            -- Burst cluster
+            local cluster = math.min(ZACH_BURST_NOTES + 2, math.max(4, math.floor(remaining / math.max(1, ticksPerSub/5))))
+            for i = 0, cluster - 1 do
+                local pos = cur + i * math.floor(ticksPerSub/(cluster+1))
+                if pos >= measureEndPPQ then break end
+                local note = (math.random() < 0.55) and DrumMap.SNARE or (math.random() < 0.5 and DrumMap.TOM_MID or DrumMap.TOM_LOW)
+                local dur = ZACH_SUSTAIN_MODE and math.floor((ticksPerSub/(cluster+1)) * ZACH_SUSTAIN_FACTOR) or nil
+                zachInsertNote(take, pos, note, nil, nil, dur)
+                if math.random() < 0.5 then
+                    local cym = (math.random() < 0.6) and DrumMap.HIHAT_CLOSED or DrumMap.RIDE
+                    zachInsertNote(take, pos, cym, 70, 110, dur)
+                end
+            end
+            cur = cur + ticksPerSub
+        else
+            -- Paradiddle-ish figure
+            local strokeSpacing = math.floor(ticksPerSub * 0.25)
+            zachInsertParadiddle(take, cur, strokeSpacing, {DrumMap.SNARE, DrumMap.TOM_HIGH, DrumMap.TOM_MID})
+            cur = cur + ticksPerSub
+        end
+    end
+
+    -- Strong ending: snare + crash at bar end
+    local endCrashPos = measureEndPPQ - math.floor(ZACH_PPQ * 0.01)
+    zachInsertNote(take, endCrashPos, DrumMap.SNARE, nil, nil, durationQ)
+    local cymbals = {DrumMap.HIHAT_OPEN, DrumMap.CRASH, DrumMap.RIDE}
+    local cym = cymbals[zachRandomRange(1, #cymbals)]
+    zachInsertNote(take, endCrashPos, cym, nil, nil, durationQ)
+end
+
+local function zachChooseAccentCymbal()
+    local cymbals = {DrumMap.HIHAT_OPEN, DrumMap.CRASH, DrumMap.RIDE}
+    return cymbals[zachRandomRange(1, #cymbals)]
+end
+
+local function zachInsertAccent(take, beatPPQ)
+    local duration = ZACH_SUSTAIN_MODE and math.floor(ZACH_PPQ * ZACH_SUSTAIN_FACTOR) or nil
+    zachInsertNote(take, beatPPQ, DrumMap.SNARE, nil, nil, duration)
+    zachInsertNote(take, beatPPQ, zachChooseAccentCymbal(), nil, nil, duration)
+    if zachCurrentMeasureAccents then table.insert(zachCurrentMeasureAccents, beatPPQ) end
+end
+
+local function zachTryQuarterPedal(take, quarterPPQ)
+    if math.random() < ZACH_FOOT_PEDAL_QUARTER_CHANCE then
+        local duration = ZACH_SUSTAIN_MODE and math.floor(ZACH_PPQ * ZACH_SUSTAIN_FACTOR) or nil
+        zachInsertNote(take, quarterPPQ, HAT_PEDAL, ZACH_FOOT_PEDAL_VEL_MIN, ZACH_FOOT_PEDAL_VEL_MAX, duration)
+    end
+end
+
+-- Main Zach Hill pattern generation function
+function generate_zach_hill_pattern()
+    -- Reset limb states
+    for limb, st in pairs(zachLimbState) do
+        st.lastNoteTime = nil
+        if limb == "RF" then st.lastPiece = DrumMap.KICK
+        elseif limb == "LF" then st.lastPiece = HAT_PEDAL
+        else st.lastPiece = DrumMap.SNARE end
+    end
+
+    reaper.Undo_BeginBlock()
+
+    local timeStart, timeEnd = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
+    if timeEnd <= timeStart then
+        reaper.ShowMessageBox("Please make a time selection first.", "Error", 0)
+        reaper.Undo_EndBlock("jtp gen: DWUMMER Zach Hill Mode", -1)
+        return
+    end
+
+    local track = reaper.GetSelectedTrack(0, 0)
+    if not track then
+        reaper.ShowMessageBox("Please select or create a drum track.", "Error", 0)
+        reaper.Undo_EndBlock("jtp gen: DWUMMER Zach Hill Mode", -1)
+        return
+    end
+
+    local newItem = reaper.CreateNewMIDIItemInProj(track, timeStart, timeEnd, false)
+    local take = reaper.GetActiveTake(newItem)
+    if not take then
+        reaper.Undo_EndBlock("jtp gen: DWUMMER Zach Hill Mode", -1)
+        return
+    end
+
+    zachGlobalPPQStart = reaper.MIDI_GetPPQPosFromProjTime(take, timeStart)
+    local timeSig_num, _ = reaper.TimeMap_GetTimeSigAtTime(0, timeStart)
+    local measureLenPPQ = timeSig_num * ZACH_PPQ
+    zachGlobalMeasureLenPPQ = measureLenPPQ
+
+    local startPPQ = zachGlobalPPQStart
+    local endPPQ = reaper.MIDI_GetPPQPosFromProjTime(take, timeEnd)
+    local totalPPQ = endPPQ - startPPQ
+    if totalPPQ <= 0 then
+        reaper.Undo_EndBlock("jtp gen: DWUMMER Zach Hill Mode", -1)
+        return
+    end
+
+    local numMeasures = math.floor(totalPPQ / measureLenPPQ)
+    local leftoverPPQ = totalPPQ % measureLenPPQ
+    local measureStartPPQ = startPPQ
+
+    -- Generate pattern per measure with 3x repeat then fill phrasing
+    local riffSpec = nil
+    for m = 1, numMeasures do
+        zachCurrentMeasureAccents = {}
+        zachCurrentMeasureStartPPQ = measureStartPPQ
+        local measureEnd = measureStartPPQ + measureLenPPQ
+
+        -- Anchor downbeat
+        local doDownbeat = (math.random() < ZACH_ANCHOR_DOWNBEAT_CHANCE)
+        if doDownbeat then
+            local duration = ZACH_SUSTAIN_MODE and math.floor(ZACH_PPQ * ZACH_SUSTAIN_FACTOR) or nil
+            zachInsertNote(take, measureStartPPQ, DrumMap.KICK, nil, nil, duration)
+        end
+
+        -- Random beat accent
+        if math.random() < ZACH_RANDOM_BEAT_ACCENT_CHANCE then
+            local randomBeatIndex = zachRandomRange(1, timeSig_num)
+            local randomBeatPPQ = measureStartPPQ + (randomBeatIndex - 1) * ZACH_PPQ
+            zachInsertAccent(take, randomBeatPPQ)
+        end
+
+        -- Quarter note pedal patterns
+        for b = 1, timeSig_num do
+            local quarterPPQ = measureStartPPQ + (b-1)*ZACH_PPQ
+            zachTryQuarterPedal(take, quarterPPQ)
+        end
+
+        -- Texture layer: add hats/ride on 8ths across the bar to avoid sparsity
+        if math.random() < ZACH_TEXTURE_LAYER_CHANCE then
+            local eighthTicks = math.floor(ZACH_PPQ * 0.5)
+            local t = measureStartPPQ
+            while t < measureEnd do
+                local cym = (math.random() < 0.7) and DrumMap.HIHAT_CLOSED or DrumMap.RIDE
+                zachInsertNote(take, t, cym, 60, 95, math.floor(eighthTicks * ZACH_SUSTAIN_FACTOR))
+                -- occasional open hat on offbeats
+                if ((t - measureStartPPQ) % (ZACH_PPQ)) == math.floor(ZACH_PPQ * 0.5) and math.random() < 0.25 then
+                    zachInsertNote(take, t, DrumMap.HIHAT_OPEN, 70, 105, math.floor(eighthTicks * 1.2))
+                end
+                t = t + eighthTicks
+            end
+        end
+
+        -- Determine phrase position (1..ZACH_PHRASE_LENGTH)
+        local phrasePos = ((m - 1) % (ZACH_PHRASE_LENGTH > 0 and ZACH_PHRASE_LENGTH or 4)) + 1
+
+        if phrasePos <= (ZACH_REPEAT_BARS > 0 and ZACH_REPEAT_BARS or 3) then
+            -- Repeating riff bars
+            if phrasePos == 1 or not riffSpec then
+                riffSpec = zachGenerateRiffSpec()
+            end
+            -- Keep the 'idea' consistent: reuse riffSpec across bars 1-3
+            zachInsertFocusedRiffWithSpec(take, measureStartPPQ + ZACH_PPQ, measureEnd, riffSpec)
+            measureStartPPQ = measureEnd
+        else
+            -- Fill bar
+            zachInsertChaosFill(take, measureStartPPQ, measureEnd, timeSig_num)
+            measureStartPPQ = measureEnd
+            riffSpec = nil -- new idea after fill
+        end
+    end
+
+    -- Handle leftover partial measure
+    if leftoverPPQ > 0 then
+        zachCurrentMeasureAccents = {}
+        zachCurrentMeasureStartPPQ = measureStartPPQ
+        local leftoverStart = measureStartPPQ
+        local leftoverEnd = leftoverStart + leftoverPPQ
+        local doDownbeatLeftover = (math.random() < ZACH_ANCHOR_DOWNBEAT_CHANCE)
+
+        if doDownbeatLeftover then
+            local duration = ZACH_SUSTAIN_MODE and math.floor(ZACH_PPQ * ZACH_SUSTAIN_FACTOR) or nil
+            zachInsertNote(take, leftoverStart, DrumMap.KICK, nil, nil, duration)
+        end
+
+        local leftoverBeats = leftoverPPQ / ZACH_PPQ
+        if math.random() < ZACH_RANDOM_BEAT_ACCENT_CHANCE then
+            local randomBeatIndex = zachRandomRange(1, math.floor(leftoverBeats))
+            local randomBeatPPQ = leftoverStart + (randomBeatIndex - 1) * ZACH_PPQ
+            if randomBeatPPQ < leftoverEnd then
+                zachInsertAccent(take, randomBeatPPQ)
+            end
+        end
+
+        local leftoverFullBeats = math.floor(leftoverBeats)
+        for b = 1, leftoverFullBeats do
+            local quarterPPQ = leftoverStart + (b-1)*ZACH_PPQ
+            if quarterPPQ >= leftoverEnd then break end
+            zachTryQuarterPedal(take, quarterPPQ)
+        end
+
+        if math.random() < ZACH_FOCUSED_RIFF_CHANCE then
+            local kitFocus = zachChooseKitSubset(zachRandomRange(2, 3))
+            zachInsertFocusedRiff(take, leftoverStart + ZACH_PPQ, leftoverEnd, kitFocus)
+        else
+            local curTick = 0
+            while curTick < leftoverPPQ do
+                local subdivs = zachRandomRange(ZACH_SUBDIVS_MIN, ZACH_SUBDIVS_MAX)
+                local ticksPerSub = math.floor((ZACH_PPQ / subdivs) + 0.5)
+                for s = 1, subdivs do
+                    local subTick = curTick + (s-1)*ticksPerSub
+                    if subTick >= leftoverPPQ then break end
+                    local actualTick = leftoverStart + subTick
+
+                    if math.random() < ZACH_BURST_CHANCE then
+                        for i = 0, ZACH_BURST_NOTES-1 do
+                            local flurryTick = actualTick + i*math.floor(ticksPerSub/(ZACH_BURST_NOTES+1))
+                            if flurryTick >= leftoverEnd then break end
+                            local duration = ZACH_SUSTAIN_MODE and math.floor((ticksPerSub/(ZACH_BURST_NOTES+1)) * ZACH_SUSTAIN_FACTOR) or nil
+                            zachInsertNote(take, flurryTick, zachChooseDrum(), nil, nil, duration)
+                        end
+                    else
+                        local doDouble = (math.random() < ZACH_DOUBLE_STROKE_CHANCE)
+                        local doPara = (not doDouble and math.random() < ZACH_PARADIDDLE_CHANCE)
+
+                        if doDouble then
+                            local note = zachChooseDrum()
+                            local strokeSpacing = math.floor(ticksPerSub * 0.25)
+                            zachInsertDoubleStroke(take, actualTick, note, strokeSpacing)
+                        elseif doPara then
+                            local strokeSpacing = math.floor(ticksPerSub * 0.25)
+                            zachInsertParadiddle(take, actualTick, strokeSpacing, nil)
+                        else
+                            local duration = ZACH_SUSTAIN_MODE and math.floor(ticksPerSub * ZACH_SUSTAIN_FACTOR) or nil
+                            zachInsertNote(take, actualTick, zachChooseDrum(), nil, nil, duration)
+                        end
+                    end
+                end
+                curTick = curTick + ZACH_PPQ
+            end
+        end
+    end
+
+    reaper.MIDI_Sort(take)
+    reaper.UpdateItemInProject(newItem)
+    reaper.Undo_EndBlock("jtp gen: DWUMMER Zach Hill Mode", -1)
+
+    if DEBUG then
+        reaper.ShowConsoleMsg("DWUMMER: Zach Hill mode pattern generated\n")
+    end
 end
 
 -- Main entry point
@@ -1091,6 +1745,10 @@ function main()
     elseif mode_choice == 2 then
         -- Manual Mode
         params = show_parameter_gui()
+    elseif mode_choice == 3 then
+        -- Zach Hill Mode
+        generate_zach_hill_pattern()
+        return
     end
 
     if params then

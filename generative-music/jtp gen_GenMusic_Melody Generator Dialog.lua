@@ -98,6 +98,7 @@
 --   Advanced Polyphony with Music Theory (v1.4)
 --   - Four polyphony modes: Free (creative), Harmonic (chords), Voice Leading (counterpoint), Pianist/Guitarist
 --   - Pianist/Guitarist mode: Chords on strong beats with fills between (runs, riffs, arpeggios)
+--   - Zach Hill Polyphonic mode (v3.x): Chaotic virtuoso adaptation of drum engine (bursts, double strokes, paradiddle pitch patterns, focused riff subsets, adaptive velocities)
 --   - Theory Weight parameter (0-1) blends between free/creative and strict music theory
 --   - Proper voice leading rules: contrary motion, smooth voice movement, consonance
 --   - Avoids parallel perfect intervals, voice crossing, and other theory violations
@@ -162,6 +163,9 @@ local defaults = {
     motif_repeat_chance = tonumber(get_ext('motif_repeat_chance', 40)), -- 0-100% chance of repeating a previous phrase
 }
 
+-- Deferred execution flag for Zach Hill polyphonic mode
+local zach_hill_defer = false
+
 -- Small curated scale list (intervals from root)
 local scales = {
     major = {0,2,4,5,7,9,11},
@@ -177,6 +181,23 @@ local scales = {
     minor_pentatonic = {0,3,5,7,10},
     whole_tone = {0,2,4,6,8,10},
     blues = {0,3,5,6,7,10}
+}
+
+-- One-word mood descriptors for each scale/mode (display only)
+scale_moods = {
+    major = 'Bright',
+    natural_minor = 'Sad',
+    dorian = 'Soulful',
+    phrygian = 'Dark',
+    lydian = 'Dreamy',
+    mixolydian = 'Bluesy',
+    locrian = 'Tense',
+    harmonic_minor = 'Exotic',
+    melodic_minor = 'Elegant',
+    major_pentatonic = 'Open',
+    minor_pentatonic = 'Moody',
+    whole_tone = 'Surreal',
+    blues = 'Gritty'
 }
 
 -- Build sorted scale list for consistent menu ordering
@@ -196,6 +217,140 @@ end
 local function table_contains(t, x)
     for i = 1, #t do if t[i] == x then return true end end
     return false
+end
+
+-- Zach Hill Polyphonic Melody Mode (function definition placed early for availability)
+-- Chaotic virtuosic melodic generator inspired by drummer adaptation.
+local function generate_zach_hill_polyphonic(take, start_time, end_time, scale_notes, num_voices, measures, min_keep, max_keep, quarter_note)
+    local function clamp(v,lo,hi) return math.max(lo, math.min(hi, v)) end
+    local EXT_ZACH = 'jtp_gen_melody_zach'
+    local function get_zach(key, def) local v = reaper.GetExtState(EXT_ZACH, key); if v=='' then return def end return tonumber(v) or def end
+    local function set_zach(key,val) reaper.SetExtState(EXT_ZACH, key, tostring(val), true) end
+    local BURST_CHANCE        = get_zach('burst_chance', 0.25)
+    local DOUBLE_CHANCE       = get_zach('double_chance', 0.25)
+    local PARADIDDLE_CHANCE   = get_zach('paradiddle_chance', 0.25)
+    local FOCUSED_RIFF_CHANCE = get_zach('focused_riff_chance', 0.30)
+    local RANDOM_ACCENT_CHANCE= get_zach('random_accent_chance', 0.60)
+    local SUBDIVS_MAX         = get_zach('subdivs_max', 3)
+
+    local paradiddle_seq = {1,2,1,1,2,1,2,2}
+    local total_measures = measures
+    local measure_len = quarter_note * 4
+
+    local voice_last_pitch = {}
+    local voice_last_time  = {}
+    local function safe_pitch(voice, pitch, t)
+        local prev = voice_last_pitch[voice]
+        local prev_t = voice_last_time[voice]
+        if not prev then return pitch end
+        local dt = t - prev_t
+        local interval = math.abs(pitch - prev)
+        if dt < 0.12 and interval > 4 then
+            if pitch > prev then pitch = prev + 4 else pitch = prev - 4 end
+        end
+        return pitch
+    end
+    local function insert_note(ppq_s, ppq_e, voice, pitch, vel)
+        reaper.MIDI_InsertNote(take, false, false, ppq_s, ppq_e, voice, pitch, vel, false)
+        voice_last_pitch[voice] = pitch
+        voice_last_time[voice] = reaper.MIDI_GetProjTimeFromPPQPos(take, ppq_s)
+    end
+    local function timeToPPQ(t) return reaper.MIDI_GetPPQPosFromProjTime(take, t) end
+    local function choose_subset(size)
+        local pool = {table.unpack(scale_notes)}
+        local out = {}
+        for i=1,size do if #pool==0 then break end local idx = math.random(1,#pool); out[#out+1]=pool[idx]; table.remove(pool,idx) end
+        table.sort(out); return out
+    end
+    local function dyn_vel(measure_idx, accent, rapid_dt)
+        local base = 70 + math.floor((measure_idx/total_measures)*25)
+        if accent then base = base + 20 end
+        if rapid_dt and rapid_dt < 0.15 then base = base - 15 end
+        return clamp(base + math.random(-8,8), 20, 127)
+    end
+
+    local cur_measure_start = start_time
+    for m=1,total_measures do
+        local ms_start_ppq = timeToPPQ(cur_measure_start)
+        -- Downbeat triad anchor
+        local root_idx = math.random(1,#scale_notes)
+        local triad = { scale_notes[root_idx], scale_notes[math.min(#scale_notes, root_idx+2)], scale_notes[math.min(#scale_notes, root_idx+4)] }
+        for v=0, math.min(num_voices-1, #triad-1) do
+            insert_note(ms_start_ppq, ms_start_ppq + timeToPPQ(quarter_note*0.9), v, triad[v+1], dyn_vel(m,true,nil))
+        end
+        if math.random() < RANDOM_ACCENT_CHANCE then
+            local acc_beat = math.random(2,4)
+            local acc_ppq = ms_start_ppq + timeToPPQ((acc_beat-1)*quarter_note)
+            for v=0, math.min(num_voices-1,2) do
+                local pitch = scale_notes[math.random(1,#scale_notes)]
+                insert_note(acc_ppq, acc_ppq + timeToPPQ(quarter_note*0.5), v, pitch, dyn_vel(m,true,nil))
+            end
+        end
+        local riff_subset, riff_mode
+        if math.random() < FOCUSED_RIFF_CHANCE then riff_subset = choose_subset(math.random(3,4)); riff_mode = true end
+        for beat=1,4 do
+            local subdivs = math.random(1,SUBDIVS_MAX)
+            local ticks = quarter_note / subdivs
+            for s=1,subdivs do
+                local sub_start = cur_measure_start + (beat-1)*quarter_note + (s-1)*ticks
+                local sub_dur = ticks * (math.random(6,9)/10)
+                local sub_end = sub_start + sub_dur
+                local ppq_s = timeToPPQ(sub_start)
+                local ppq_e = timeToPPQ(sub_end)
+                if riff_mode then
+                    local pitch = riff_subset[((m+beat+s)%#riff_subset)+1]
+                    pitch = safe_pitch((beat+s)%num_voices, pitch, sub_start)
+                    insert_note(ppq_s, ppq_e, (beat+s)%num_voices, pitch, dyn_vel(m,false,sub_dur))
+                else
+                    if math.random() < BURST_CHANCE then
+                        local burst_subset = choose_subset(5)
+                        local count = 6
+                        for b=1,count do
+                            local bt = sub_start + sub_dur*(b-1)/count
+                            local pitch = burst_subset[((b <= count/2) and b or (count-b+1))]
+                            pitch = safe_pitch(b%num_voices, pitch, bt)
+                            local ppq_bt = timeToPPQ(bt)
+                            insert_note(ppq_bt, ppq_bt + timeToPPQ(sub_dur/count*0.8), b%num_voices, pitch, dyn_vel(m,false,sub_dur/count))
+                        end
+                    elseif math.random() < DOUBLE_CHANCE then
+                        local pitch = scale_notes[math.random(1,#scale_notes)]
+                        local mid_ppq = ppq_s + (ppq_e - ppq_s)*0.35
+                        pitch = safe_pitch(beat%num_voices, pitch, sub_start)
+                        insert_note(ppq_s, mid_ppq, beat%num_voices, pitch, dyn_vel(m,false,sub_dur))
+                        insert_note(mid_ppq, ppq_e, beat%num_voices, pitch, dyn_vel(m,false,sub_dur*0.35))
+                    elseif math.random() < PARADIDDLE_CHANCE then
+                        local subset = choose_subset(2)
+                        local stroke_dur = sub_dur / #paradiddle_seq
+                        for idx, sel in ipairs(paradiddle_seq) do
+                            local t = sub_start + (idx-1)*stroke_dur
+                            local p = safe_pitch((beat+idx)%num_voices, subset[sel], t)
+                            local ppq_st = timeToPPQ(t)
+                            insert_note(ppq_st, ppq_st + timeToPPQ(stroke_dur*0.85), (beat+idx)%num_voices, p, dyn_vel(m,false,stroke_dur))
+                        end
+                    else
+                        local pitch = scale_notes[math.random(1,#scale_notes)]
+                        pitch = safe_pitch(beat%num_voices, pitch, sub_start)
+                        insert_note(ppq_s, ppq_e, beat%num_voices, pitch, dyn_vel(m,false,sub_dur))
+                    end
+                end
+            end
+        end
+        cur_measure_start = cur_measure_start + measure_len
+    end
+    -- Prune to target keep range
+    local _, cnt = reaper.MIDI_CountEvts(take)
+    local target = math.random(math.floor(min_keep), math.floor(max_keep))
+    if cnt > target then
+        local to_remove = cnt - target
+        for i=cnt-1,0,-1 do if to_remove<=0 then break end reaper.MIDI_DeleteNote(take,i) to_remove = to_remove - 1 end
+    end
+    -- Resolution chord (tonic)
+    local tonic = scale_notes[1]
+    local resolve_ppq = reaper.MIDI_GetPPQPosFromProjTime(take, end_time - quarter_note*0.5)
+    for v=0, math.min(num_voices-1,2) do
+        reaper.MIDI_InsertNote(take,false,false, resolve_ppq, resolve_ppq + reaper.MIDI_GetPPQPosFromProjTime(take, reaper.MIDI_GetProjTimeFromPPQPos(take, resolve_ppq) + quarter_note*0.4), v, tonic, 100, false)
+    end
+    set_zach('burst_chance', clamp(BURST_CHANCE + 0.02, 0.15, 0.40))
 end
 
 -- =============================
@@ -574,15 +729,18 @@ else
     -- Show scale selection menu (with random option)
     scale_menu_items = {"random"}
     for _, name in ipairs(scale_keys) do
-        table.insert(scale_menu_items, name)
+        local mood = scale_moods[name]
+        local display = mood and (name .. " (" .. mood .. ")") or name
+        table.insert(scale_menu_items, display)
     end
 
     -- Use auto-detected scale as default if overriding, otherwise use saved preference
     default_scale_name = auto_detected_scale or defaults.scale_name
     default_scale_idx = 1
     if default_scale_name ~= "random" then
-        for i, name in ipairs(scale_menu_items) do
-            if name == default_scale_name then
+        for i, display in ipairs(scale_menu_items) do
+            local base = display:match('^([%w_]+)')
+            if base == default_scale_name then
                 default_scale_idx = i
                 break
             end
@@ -595,7 +753,12 @@ else
     -- Process selections from menus
     input_note_name = note_names[note_choice]
     input_octave = tonumber(octaves[octave_choice])
-    scale_name = scale_menu_items[scale_choice]
+    local chosen_display = scale_menu_items[scale_choice]
+    if chosen_display == 'random' then
+        scale_name = 'random'
+    else
+        scale_name = chosen_display:match('^([%w_]+)')
+    end
     root_note = note_name_to_pitch(input_note_name, input_octave)
 end
 
@@ -608,7 +771,7 @@ poly_mode = 'free'
 theory_weight = defaults.theory_weight
 
 if defaults.num_voices > 1 then
-    poly_modes = {"Free (Creative)", "Harmonic (Chords)", "Voice Leading (Counterpoint)", "Pianist/Guitarist (Chords + Fills)"}
+    poly_modes = {"Free (Creative)", "Harmonic (Chords)", "Voice Leading (Counterpoint)", "Pianist/Guitarist (Chords + Fills)", "Zach Hill Polyphonic (Chaotic Virtuoso)"}
     default_poly_idx = 1
     if defaults.poly_mode == 'harmonic' then default_poly_idx = 2
     elseif defaults.poly_mode == 'voice_leading' then default_poly_idx = 3
@@ -622,6 +785,7 @@ if defaults.num_voices > 1 then
     elseif poly_choice == 2 then poly_mode = 'harmonic'
     elseif poly_choice == 3 then poly_mode = 'voice_leading'
     elseif poly_choice == 4 then poly_mode = 'pianist'
+    elseif poly_choice == 5 then poly_mode = 'zach_hill'
     end
 end
 
@@ -2195,6 +2359,15 @@ else
                 deleted = deleted + 1
             end
         end
+
+        -- Close voice leading branch
+        -- (Ensures clean separation before inserting Zach Hill polyphonic mode)
+
+    -- =============================
+    -- Mode 5: ZACH HILL POLYPHONIC (Deferred Generation)
+    -- =============================
+    elseif poly_mode == 'zach_hill' then
+        zach_hill_defer = true  -- handled after branch chain
 
     -- =============================
     -- Mode 4: PIANIST/GUITARIST - Master Improviser Mode
@@ -4390,6 +4563,11 @@ local root_name = note_names[(root_note % 12) + 1]
 local octave = math.floor(root_note / 12) - 1
 local take_name = string.format('%s%d %s', root_name, octave, chosen_scale_key)
 reaper.GetSetMediaItemTakeInfo_String(take, 'P_NAME', take_name, true)
+
+-- Execute deferred Zach Hill polyphonic generation if selected
+if zach_hill_defer then
+    generate_zach_hill_polyphonic(take, start_time, end_time, scale_notes, num_voices, measures, defaults.min_keep, defaults.max_keep, quarter_note)
+end
 
 reaper.Undo_EndBlock('jtp gen: Melody Generator (Dialog)', -1)
 reaper.UpdateArrange()

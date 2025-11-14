@@ -12,6 +12,18 @@ if not reaper then
     return
 end
 
+-- Helper function to find parameter index by name
+local function find_param_by_name(track, fx_idx, target_name)
+  local num_params = reaper.TrackFX_GetNumParams(track, fx_idx)
+  for i = 0, num_params - 1 do
+    local _, name = reaper.TrackFX_GetParamName(track, fx_idx, i, "")
+    if name == target_name then
+      return i
+    end
+  end
+  return -1
+end
+
 function main()
   -- Get the count of selected items
   local item_count = reaper.CountSelectedMediaItems(0)
@@ -82,6 +94,23 @@ function main()
     44,  -- HAT_PEDAL
   }
 
+  -- Drummer perspective pan map (normalized 0.0-1.0, where 0.5 is center)
+  -- Negative values = left, Positive = right from drummer's perspective
+  local pan_map = {
+    0.5,   -- KICK - Center
+    0.5,   -- SNARE - Center
+    0.65,  -- HIHAT_CLOSED - Right (drummer's right hand)
+    0.65,  -- HIHAT_OPEN - Right
+    0.3,   -- TOM_LOW - Left
+    0.45,  -- TOM_MID - Slightly left of center
+    0.6,   -- TOM_HIGH - Slightly right
+    0.7,   -- RIDE - Right
+    0.75,  -- CRASH - Far right
+    0.5,   -- SNARE_ACCENT - Center
+    0.4,   -- SIDE_STICK - Slightly left
+    0.65,  -- HAT_PEDAL - Right
+  }
+
   -- Loop over glued items
   for i = 1, #new_items do
     local item = new_items[i]
@@ -94,11 +123,18 @@ function main()
     local fx_index = reaper.TrackFX_AddByName(new_track, "ReaSamplOmatic5000 (Cockos)", false, -1)
     reaper.TrackFX_SetNamedConfigParm(new_track, fx_index, "FILE0", filenamebuf)
     reaper.TrackFX_SetParamNormalized(new_track, fx_index, 0, 1.0)  -- Set volume to 100%
-    reaper.TrackFX_SetParamNormalized(new_track, fx_index, 2, 0.5)  -- Set pan to center
 
     -- Set pitch mode to 0.0 (Sample mode - no pitch shifting)
     -- Parameter 8 controls the pitch mode: 0.0 = Sample, 0.5 = Note (semitone), 1.0 = Note (shifted)
     reaper.TrackFX_SetParamNormalized(new_track, fx_index, 8, 0.0)  -- Set to Sample mode
+
+    -- Find and set pan parameter dynamically
+    local pan_param = find_param_by_name(new_track, fx_index, "Pan")
+    if pan_param >= 0 then
+      -- Get pan value from pan map, or default to center if we run out of mapped positions
+      local pan_value = pan_map[i] or 0.5
+      reaper.TrackFX_SetParam(new_track, fx_index, pan_param, pan_value)
+    end
 
     -- Get MIDI note from drum map, or use incrementing value if we run out of mapped drums
     local midi_note = drum_map[i] or (drum_map[#drum_map] + (i - #drum_map))

@@ -112,6 +112,28 @@ Scripts for enhancing REAPER workflow, task management, and productivity.
 ### Generative Music
 Algorithmic composition tools, random generators, and experimental music creation scripts.
 
+#### Featured Scripts
+
+**Guitar Picking Transformer** (`jtp gen_GenMusic_Guitar Picking Transformer.lua`)
+- Transforms sustained MIDI chords into sophisticated guitar picking patterns
+- 14 distinct patterns: Travis picking, folk, jazz, flamenco, sweep, hybrid, tremolo, campanella, and more
+- Intelligent pattern selection based on chord characteristics
+- Humanization and articulation modeling
+- Non-interactive workflow - perfect for rapid experimentation
+- See `GUITAR_PICKING_MODE_README.md` for full documentation
+
+**MIDI Note Arpeggiator** (`jtp gen_GenMusic_MIDI Note Arpeggiator.lua`)
+- Multiple arpeggiation modes including Up-Down and Guitar Picking
+- Velocity contouring for musical dynamics
+- Configurable rate and note length settings
+
+**Melody Generator Dialog** (`jtp gen_GenMusic_Melody Generator Dialog.lua`)
+- Master Improviser Mode with 39+ improvisational techniques
+- Pianist/Guitarist polyphony mode with chord voicings and fills
+- Multiple generation modes: free, harmonic, voice leading
+- Auto-detection of scale/key from region names
+- See mode-specific READMEs for detailed information
+
 ## 🤝 Contributing
 
 When adding new scripts:

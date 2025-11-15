@@ -2294,9 +2294,35 @@ else
                 end
             end
 
-            local idx = find_index(scale_notes, prev_note)
-            local new_idx = clamp(idx + move, 1, #scale_notes)
-            local new_pitch = scale_notes[new_idx]
+            -- MULTI-OCTAVE VOICE LEADING: Allow notes outside single octave
+            -- Find current position in scale, then apply chromatic offset for octaves
+            local idx = find_index(scale_notes, prev_note % 12 == 0 and prev_note or
+                        ((prev_note % 12) + scale_notes[1]) % 12 + scale_notes[1])
+
+            -- Calculate which octave we're in
+            local octave_offset = math.floor((prev_note - scale_notes[1]) / 12)
+
+            -- Calculate new index with wrapping for multi-octave range
+            local new_idx = idx + move
+            local new_octave_offset = octave_offset
+
+            -- Handle octave wrapping
+            while new_idx > #scale_notes do
+                new_idx = new_idx - #scale_notes
+                new_octave_offset = new_octave_offset + 1
+            end
+            while new_idx < 1 do
+                new_idx = new_idx + #scale_notes
+                new_octave_offset = new_octave_offset - 1
+            end
+
+            -- Clamp to reasonable MIDI range (C-1 to G9)
+            new_octave_offset = clamp(new_octave_offset, -2, 8)
+
+            local new_pitch = scale_notes[new_idx] + (new_octave_offset * 12)
+
+            -- Additional safety clamp to MIDI range
+            new_pitch = clamp(new_pitch, 0, 127)
 
             -- Update state
             state.direction = (new_pitch > prev_note) and 1 or ((new_pitch < prev_note) and -1 or 0)

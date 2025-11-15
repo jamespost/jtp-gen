@@ -14,10 +14,11 @@ end
 -- Arpeggiation modes (extensible for future additions)
 local ARP_MODES = {
     UP_DOWN = 1,
+    GUITAR_PICKING = 2,
     -- Future modes can be added here:
-    -- UP = 2,
-    -- DOWN = 3,
-    -- RANDOM = 4,
+    -- UP = 3,
+    -- DOWN = 4,
+    -- RANDOM = 5,
     -- etc.
 }
 
@@ -28,10 +29,28 @@ local config = {
     min_note_length = 1/16  -- Minimum note length to consider for arpeggiation
 }
 
+-- Show mode selection dropdown menu
+local function showModeSelection()
+    local mode_items = {
+        "Up-Down (symmetrical ascending/descending)",
+        "Guitar Picking (algorithmic fingerstyle patterns)"
+    }
+
+    -- Position menu at mouse cursor
+    gfx.x, gfx.y = reaper.GetMousePosition()
+    local choice = gfx.showmenu(table.concat(mode_items, "|"))
+
+    -- Returns 0 if cancelled, or 1-based index of selection
+    return choice
+end
+
 -- Get user input for arpeggiation settings
-local function getUserInput()
+local function getUserInput(selected_mode)
+    -- Determine mode name for display
+    local mode_name = selected_mode == ARP_MODES.GUITAR_PICKING and "Guitar Picking" or "Up-Down"
+
     local retval, user_input = reaper.GetUserInputs(
-        "jtp gen: MIDI Note Arpeggiator",
+        "jtp gen: MIDI Note Arpeggiator - " .. mode_name,
         3,
         "Arp Rate (1/4, 1/8, 1/16, 1/32):,Min Note Length (1/4, 1/8, 1/16):,Velocity Contour (0=off, 1=on):,extrawidth=200",
         "1/16,1/16,1"
@@ -71,7 +90,8 @@ local function getUserInput()
     return {
         arp_rate = arp_rate,
         min_note_length = min_length,
-        velocity_contour = vel_contour == 1
+        velocity_contour = vel_contour == 1,
+        arp_mode = selected_mode
     }
 end
 
@@ -108,6 +128,116 @@ local function generateUpDownPattern(num_notes)
     -- Down (excluding first and last to avoid repeats)
     for i = num_notes - 1, 2, -1 do
         table.insert(pattern, i)
+    end
+
+    return pattern
+end
+
+-- Generate algorithmic guitar picking pattern
+local function generateGuitarPickingPattern(num_notes)
+    if num_notes <= 1 then
+        return {1}
+    end
+
+    -- Seed random with current time for unique patterns each run
+    math.randomseed(os.time())
+    -- Extra randomization
+    for i = 1, 10 do math.random() end
+
+    local pattern = {}
+    local bass_note = 1  -- Lowest note
+    local high_note = num_notes  -- Highest note
+    local mid_notes = {}
+
+    -- Collect middle notes
+    for i = 2, num_notes - 1 do
+        table.insert(mid_notes, i)
+    end
+
+    -- Choose a pattern structure based on note count
+    local structure_type = math.random(1, 4)
+
+    if num_notes == 2 then
+        -- Simple alternating bass
+        pattern = {1, 2, 1, 2}
+
+    elseif num_notes == 3 then
+        -- Classic 3-note patterns
+        local patterns = {
+            {1, 2, 3, 2},           -- Bass-mid-high-mid
+            {1, 3, 2, 3},           -- Bass-high-mid-high
+            {1, 2, 1, 3},           -- Bass-mid-bass-high
+            {1, 3, 1, 2, 1, 3},     -- Travis-style
+        }
+        pattern = patterns[math.random(1, #patterns)]
+
+    elseif num_notes == 4 then
+        -- 4-note fingerstyle patterns (very common for guitar)
+        local patterns = {
+            {1, 3, 2, 4},           -- Bass-mid2-mid1-high
+            {1, 4, 2, 3},           -- Bass-high-mid1-mid2
+            {1, 2, 3, 4, 3, 2},     -- Rolling pattern
+            {1, 3, 1, 4, 2, 4},     -- Alternating bass with melody
+            {1, 4, 3, 4, 2, 4},     -- Travis picking variant
+        }
+        pattern = patterns[math.random(1, #patterns)]
+
+    else
+        -- For 5+ notes, generate algorithmic pattern
+        if structure_type == 1 then
+            -- Alternating bass with random upper notes
+            local bass_alternates = {1, math.min(3, num_notes - 1)}  -- Root and third/fifth
+            local upper_pool = {}
+            for i = math.ceil(num_notes / 2), num_notes do
+                table.insert(upper_pool, i)
+            end
+
+            for i = 1, 8 do
+                table.insert(pattern, bass_alternates[(i % 2) + 1])
+                table.insert(pattern, upper_pool[math.random(1, #upper_pool)])
+            end
+
+        elseif structure_type == 2 then
+            -- Rolling pattern with emphasis
+            local roll = {}
+            for i = 1, num_notes do
+                table.insert(roll, i)
+            end
+            -- Add the roll going up, then emphasize high notes
+            for i = 1, #roll do
+                table.insert(pattern, roll[i])
+            end
+            table.insert(pattern, high_note)
+            for i = #roll - 1, 2, -1 do
+                table.insert(pattern, roll[i])
+            end
+
+        elseif structure_type == 3 then
+            -- Arpeggio with bass emphasis (common in folk/country)
+            table.insert(pattern, bass_note)
+            for i = 2, num_notes do
+                table.insert(pattern, i)
+            end
+            table.insert(pattern, bass_note)
+            for i = num_notes, 2, -1 do
+                table.insert(pattern, i)
+            end
+
+        else
+            -- Random but musical (weighted toward outer notes)
+            for i = 1, 16 do
+                local rand = math.random()
+                if rand < 0.3 then
+                    table.insert(pattern, bass_note)  -- 30% bass
+                elseif rand < 0.5 then
+                    table.insert(pattern, high_note)  -- 20% high
+                elseif #mid_notes > 0 then
+                    table.insert(pattern, mid_notes[math.random(1, #mid_notes)])  -- 50% middle
+                else
+                    table.insert(pattern, bass_note)
+                end
+            end
+        end
     end
 
     return pattern
@@ -156,6 +286,8 @@ local function arpeggiateNotes(notes, arp_rate, mode, velocity_contour)
     local pattern
     if mode == ARP_MODES.UP_DOWN then
         pattern = generateUpDownPattern(#notes)
+    elseif mode == ARP_MODES.GUITAR_PICKING then
+        pattern = generateGuitarPickingPattern(#notes)
     else
         pattern = generateUpDownPattern(#notes)  -- Default to up-down
     end
@@ -330,14 +462,19 @@ function main()
         return
     end
 
-    -- Get user settings
-    local settings = getUserInput()
-    if not settings then
+    -- Show mode selection menu
+    local mode_choice = showModeSelection()
+    if mode_choice == 0 then
         return  -- User cancelled
     end
 
-    -- Add mode to settings
-    settings.arp_mode = config.arp_mode
+    local selected_mode = mode_choice  -- 1 = UP_DOWN, 2 = GUITAR_PICKING
+
+    -- Get user settings
+    local settings = getUserInput(selected_mode)
+    if not settings then
+        return  -- User cancelled
+    end
 
     reaper.Undo_BeginBlock()
 
@@ -358,8 +495,9 @@ function main()
             0
         )
     else
+        local mode_name = settings.arp_mode == ARP_MODES.GUITAR_PICKING and "Guitar" or "Up-Down"
         reaper.UpdateArrange()
-        reaper.Undo_EndBlock("jtp gen: Arpeggiate MIDI Notes (Up-Down)", -1)
+        reaper.Undo_EndBlock("jtp gen: Arpeggiate MIDI Notes (" .. mode_name .. ")", -1)
     end
 end
 

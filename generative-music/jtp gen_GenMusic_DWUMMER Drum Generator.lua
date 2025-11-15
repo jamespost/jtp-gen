@@ -1,9 +1,9 @@
 -- @description jtp gen_GenMusic_DWUMMER Drum Generator
 -- @author James
--- @version 3.1
+-- @version 4.0
 -- @about
---   # DWUMMER Drum Generator v3.1 - Musical Intelligence & Expressive Performance
---   Complete implementation of Phases 0-4 of the DWUMMER development plan.
+--   # DWUMMER Drum Generator v4.0 - Genre-Specific Infinite Variation
+--   Complete implementation of Phases 0-4 + Genre Mode System
 --
 --   Phase 0: Initialization, deterministic seed management, time conversion, drum map lookup
 --   Phase 1: I/O Handler MVP - MIDI item creation and note insertion
@@ -19,13 +19,26 @@
 --   - 4.6: Adaptive Dynamics & Microtiming - Natural push/pull and dynamic swells
 --   - 4.7: Groove Surprise & "Mistake" Engine - Human unpredictability
 --
---   **v3.1 NEW: Zach Hill Mode - Chaotic Technical Patterns**
+--   **v3.1: Zach Hill Mode - Chaotic Technical Patterns**
 --   - Adaptive burst patterns, double strokes, and paradiddles
 --   - Physical limb constraint simulation for realistic drumming
 --   - Focused riff generation with kit subsets
 --   - Dynamic velocity based on timing and hand/foot movement
 --   - Persistent adaptive parameters (learns from usage patterns)
 --   - Phrase logic: 3x repeating riff then a fill (Zach-esque)
+--
+--   **v4.0 NEW: Genre Mode System - Infinitely Variable, Always Recognizable**
+--   - **House:** 4-on-the-floor with variable hat patterns and ghost snares
+--   - **Techno:** Relentless 16th groove with industrial textures
+--   - **Electro:** Syncopated 808 patterns with angular rhythms
+--   - **Drum & Bass:** Fast 2-step with Amen break variations
+--   - **Jungle:** Rapid snare chops with shuffled feel
+--   - **Hip Hop:** Boom-bap with laid-back swing and ghost notes
+--   - **Trap:** Half-time snare with signature rapid hat rolls
+--
+--   Each genre has CORE IMMUTABLE patterns (what makes it recognizable) plus
+--   VARIABLE ELEMENTS that change with every generation for infinite variety.
+--   Physical limb constraints ensure realistic drumming performance.
 
 if not reaper then return end
 
@@ -1070,7 +1083,15 @@ function show_mode_selection()
     local mode_items = {
         "Random (auto-generate all parameters)",
         "Manual (configure your own settings)",
-        "Zach Hill Mode (chaotic, technical drum patterns)"
+        "Zach Hill Mode (chaotic, technical drum patterns)",
+        "|Genre Modes (infinitely variable):|",
+        "House (4-on-floor with variation)",
+        "Techno (driving 16th groove)",
+        "Electro (syncopated 808 style)",
+        "Drum & Bass (fast 2-step breaks)",
+        "Jungle (amen break variations)",
+        "Hip Hop (boom-bap with swing)",
+        "Trap (half-time with hat rolls)"
     }
 
     -- Position menu at mouse cursor
@@ -1079,6 +1100,692 @@ function show_mode_selection()
 
     -- Returns 0 if cancelled, or 1-based index of selection
     return choice
+end
+
+-- =============================
+-- GENRE MODE: Blueprint-Based Pattern Generator
+-- =============================
+-- Each genre has core immutable patterns plus variable elements
+-- Using Zach Hill-style limb tracking and physical constraints
+
+local GenreBlueprints = {
+    HOUSE = {
+        name = "House",
+        bpm_range = {120, 130},
+        core_patterns = {
+            -- 4-on-the-floor kick (immutable)
+            kick = {steps = {1, 5, 9, 13}, velocity = {95, 110}},
+            -- Snare on 2 & 4 (can vary with ghosts)
+            snare = {steps = {5, 13}, velocity = {90, 105}},
+            -- Open hat on offbeats between each beat (CORE house element)
+            hat_open = {steps = {3, 7, 11, 15}, velocity = {85, 100}},
+        },
+        variable_elements = {
+            -- Closed hat: 8ths to 16ths with occasional skips
+            hat_closed_density = {0.65, 0.95}, -- % of 16th notes filled
+            hat_closed_velocity = {70, 90},
+            -- Ghost snares
+            ghost_snare_chance = 0.3,
+            ghost_snare_velocity = {40, 60},
+            -- Ride bell/tip for texture
+            ride_layer_chance = 0.4,
+            ride_velocity = {65, 85},
+        }
+    },
+
+    TECHNO = {
+        name = "Techno",
+        bpm_range = {125, 140},
+        core_patterns = {
+            -- Relentless 4-on-the-floor
+            kick = {steps = {1, 5, 9, 13}, velocity = {105, 120}},
+            -- Clap/snare on 2 & 4 (harder than house)
+            snare = {steps = {5, 13}, velocity = {100, 115}},
+        },
+        variable_elements = {
+            -- Tight 16th hat grid (high density)
+            hat_closed_density = {0.85, 1.0},
+            hat_closed_velocity = {75, 95},
+            -- Occasional hat accents
+            hat_accent_chance = 0.25,
+            hat_accent_velocity = {100, 115},
+            -- Industrial percussion hits
+            rim_layer_chance = 0.35,
+            rim_velocity = {80, 100},
+            -- Kick doubling for energy
+            kick_double_chance = 0.20,
+        }
+    },
+
+    ELECTRO = {
+        name = "Electro",
+        bpm_range = {120, 135},
+        core_patterns = {
+            -- 4-on-floor base with syncopation
+            kick = {steps = {1, 5, 9, 13}, velocity = {100, 115}},
+            -- 808 style claps (wider, more mechanical)
+            snare = {steps = {5, 13}, velocity = {95, 110}},
+        },
+        variable_elements = {
+            -- Angular 16th patterns
+            hat_closed_density = {0.60, 0.85},
+            hat_closed_velocity = {70, 90},
+            -- Syncopated kick variations
+            kick_syncopation_chance = 0.45, -- Add kicks on offbeats
+            kick_syncopation_positions = {3, 7, 11, 15}, -- 16th note positions
+            -- Cowbell/rim accents
+            cowbell_chance = 0.30,
+            cowbell_velocity = {85, 105},
+            -- Snare rolls (fast)
+            snare_roll_chance = 0.25,
+        }
+    },
+
+    DNB = {
+        name = "Drum & Bass",
+        bpm_range = {170, 180},
+        core_patterns = {
+            -- 2-step kick pattern (1 & 3 or variations)
+            kick = {steps = {1, 11}, velocity = {100, 120}}, -- Basic 2-step
+            -- Signature DnB snare on 3rd beat (step 9)
+            snare = {steps = {9}, velocity = {105, 120}},
+        },
+        variable_elements = {
+            -- Amen-style break variations
+            break_variation_chance = 0.80, -- High probability of complex breaks
+            break_snare_positions = {3, 6, 9, 11, 14}, -- Possible break hits
+            -- Ride cymbal pattern
+            ride_density = {0.50, 0.75},
+            ride_velocity = {70, 90},
+            -- Ghost snares (critical for DnB feel)
+            ghost_snare_chance = 0.60,
+            ghost_snare_velocity = {35, 55},
+            -- Kick pattern variations
+            kick_shuffle_chance = 0.50,
+        }
+    },
+
+    JUNGLE = {
+        name = "Jungle",
+        bpm_range = {160, 175},
+        core_patterns = {
+            -- Amen break foundation
+            kick = {steps = {1, 10}, velocity = {95, 115}},
+            snare = {steps = {5, 13}, velocity = {100, 118}},
+        },
+        variable_elements = {
+            -- Rapid snare chops and rolls
+            snare_chop_chance = 0.85,
+            snare_chop_density = {0.70, 0.95},
+            snare_roll_chance = 0.65,
+            -- Shuffled hi-hat feel
+            hat_shuffle_amount = {0.55, 0.70},
+            hat_density = {0.60, 0.85},
+            hat_velocity = {65, 85},
+            -- Tom fills
+            tom_fill_chance = 0.50,
+            -- Ride bell patterns
+            ride_bell_chance = 0.45,
+        }
+    },
+
+    HIPHOP = {
+        name = "Hip Hop",
+        bpm_range = {85, 105},
+        core_patterns = {
+            -- Boom-bap: kick on 1 & 3 (steps 1 & 9)
+            kick = {steps = {1, 9}, velocity = {100, 120}},
+            -- Snare on 2 & 4 (steps 5 & 13)
+            snare = {steps = {5, 13}, velocity = {95, 115}},
+        },
+        variable_elements = {
+            -- Laid back feel (swing and timing)
+            swing_amount = {0.55, 0.68},
+            laid_back_timing = {-10, 10}, -- PPQ offset for feel
+            -- Ghost snares (signature hip hop)
+            ghost_snare_chance = 0.50,
+            ghost_snare_velocity = {40, 60},
+            -- Hi-hat variations (closed/open mix)
+            hat_density = {0.40, 0.70}, -- Sparse to moderate
+            hat_open_chance = 0.25,
+            -- Kick doubling
+            kick_double_chance = 0.35,
+            -- Rimshot snare chance
+            rimshot_snare_chance = 0.30,
+        }
+    },
+
+    TRAP = {
+        name = "Trap",
+        bpm_range = {130, 160},
+        core_patterns = {
+            -- Half-time snare on beat 3 (step 9)
+            snare = {steps = {9}, velocity = {100, 120}},
+            -- 808 kick pattern (sparse but impactful)
+            kick = {steps = {1}, velocity = {110, 127}},
+        },
+        variable_elements = {
+            -- Signature rapid hi-hat rolls
+            hat_roll_chance = 0.70, -- Very high
+            hat_roll_speed = {16, 32}, -- 16th or 32nd note rolls
+            hat_roll_length = {2, 6}, -- Number of notes in roll
+            hat_roll_velocity = {80, 110},
+            -- Hat triplet patterns
+            hat_triplet_chance = 0.50,
+            -- 808 kick variations
+            kick_pattern_variation = 0.65,
+            kick_extra_positions = {3, 5, 7, 11, 13, 15},
+            -- Layered snares
+            snare_layer_chance = 0.40,
+            -- Open hat accents
+            hat_open_accent_chance = 0.45,
+        }
+    }
+}
+
+-- Genre-aware note insertion with physical constraints (reusing Zach Hill limb system)
+local function genreInsertNote(take, ppq_pos, note, velocity, duration, limb_state)
+    local note_time = reaper.MIDI_GetProjTimeFromPPQPos(take, ppq_pos)
+    local humanize_offset = (math.random() * 2 - 1) * (3 / 1000) -- Subtle humanization
+    local final_time = note_time + humanize_offset
+
+    -- Determine limb
+    local limb = "RH"
+    if note == DrumMap.KICK then
+        limb = "RF"
+    elseif note == HAT_PEDAL then
+        limb = "LF"
+    elseif note == DrumMap.HIHAT_CLOSED or note == DrumMap.HIHAT_OPEN or note == DrumMap.RIDE then
+        limb = "RH" -- Right hand typically plays hats/ride
+    else
+        limb = (math.random() < 0.5) and "RH" or "LH"
+    end
+
+    -- Check physical constraints
+    if limb_state[limb].lastNoteTime then
+        local dt = final_time - limb_state[limb].lastNoteTime
+        local min_interval = (limb == "RF" or limb == "LF") and 0.06 or 0.015
+        if dt < min_interval then
+            return false -- Can't play this note
+        end
+    end
+
+    -- Insert note
+    local ppq_with_offset = reaper.MIDI_GetPPQPosFromProjTime(take, final_time)
+    local note_off = ppq_with_offset + (duration or 120)
+    reaper.MIDI_InsertNote(take, false, false, ppq_with_offset, note_off, 0, note, velocity, false)
+
+    -- Update limb state
+    limb_state[limb].lastNoteTime = final_time
+    limb_state[limb].lastPiece = note
+
+    return true
+end
+
+-- Random value within range
+local function randRange(min_val, max_val)
+    return min_val + math.random() * (max_val - min_val)
+end
+
+local function randInt(min_val, max_val)
+    return math.floor(randRange(min_val, max_val + 0.9999))
+end
+
+-- Generate a genre-based pattern
+function generate_genre_pattern(genre_key)
+    local blueprint = GenreBlueprints[genre_key]
+    if not blueprint then
+        reaper.ShowMessageBox("Unknown genre: " .. tostring(genre_key), "Error", 0)
+        return
+    end
+
+    reaper.Undo_BeginBlock()
+
+    -- Get time selection
+    local time_start, time_end = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
+    if time_end <= time_start then
+        -- Use cursor position and pattern length
+        time_start = reaper.GetCursorPosition()
+        local bpm = reaper.Master_GetTempo()
+        local bars = saved_pattern_length
+        local seconds_per_beat = 60 / bpm
+        time_end = time_start + (bars * 4 * seconds_per_beat)
+    end
+
+    local track = reaper.GetSelectedTrack(0, 0)
+    if not track then
+        reaper.ShowMessageBox("Please select a track first.", "Error", 0)
+        reaper.Undo_EndBlock("jtp gen: DWUMMER " .. blueprint.name, -1)
+        return
+    end
+
+    local new_item = reaper.CreateNewMIDIItemInProj(track, time_start, time_end, false)
+    local take = reaper.GetActiveTake(new_item)
+    if not take then
+        reaper.Undo_EndBlock("jtp gen: DWUMMER " .. blueprint.name, -1)
+        return
+    end
+
+    -- Initialize limb state
+    local limb_state = {
+        RF = {lastNoteTime = nil, lastPiece = DrumMap.KICK},
+        LF = {lastNoteTime = nil, lastPiece = DrumMap.HIHAT_CLOSED}, -- Left foot not used in genre modes
+        RH = {lastNoteTime = nil, lastPiece = DrumMap.HIHAT_CLOSED},
+        LH = {lastNoteTime = nil, lastPiece = DrumMap.SNARE},
+    }
+
+    local PPQ = 960
+    local start_ppq = reaper.MIDI_GetPPQPosFromProjTime(take, time_start)
+    local end_ppq = reaper.MIDI_GetPPQPosFromProjTime(take, time_end)
+    local total_ppq = end_ppq - start_ppq
+
+    local time_sig_num, _ = reaper.TimeMap_GetTimeSigAtTime(0, time_start)
+    local measure_len_ppq = time_sig_num * PPQ
+    local num_measures = math.floor(total_ppq / measure_len_ppq)
+
+    -- Generate pattern for each measure
+    for measure = 1, num_measures do
+        local measure_start_ppq = start_ppq + (measure - 1) * measure_len_ppq
+        local measure_end_ppq = measure_start_ppq + measure_len_ppq
+        local sixteenth_ppq = PPQ / 4
+
+        -- CORE PATTERNS (immutable, defining the genre)
+
+        -- Kick pattern
+        for _, step in ipairs(blueprint.core_patterns.kick.steps) do
+            local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+            local velocity = randInt(blueprint.core_patterns.kick.velocity[1],
+                                    blueprint.core_patterns.kick.velocity[2])
+            genreInsertNote(take, ppq_pos, DrumMap.KICK, velocity, PPQ * 0.15, limb_state)
+        end
+
+        -- Snare pattern
+        for _, step in ipairs(blueprint.core_patterns.snare.steps) do
+            local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+            local velocity = randInt(blueprint.core_patterns.snare.velocity[1],
+                                    blueprint.core_patterns.snare.velocity[2])
+            genreInsertNote(take, ppq_pos, DrumMap.SNARE, velocity, PPQ * 0.12, limb_state)
+        end
+
+        -- Open hat pattern (if defined in core - essential for house)
+        if blueprint.core_patterns.hat_open then
+            for _, step in ipairs(blueprint.core_patterns.hat_open.steps) do
+                local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                local velocity = randInt(blueprint.core_patterns.hat_open.velocity[1],
+                                        blueprint.core_patterns.hat_open.velocity[2])
+                genreInsertNote(take, ppq_pos, DrumMap.HIHAT_OPEN, velocity, PPQ * 0.25, limb_state)
+            end
+        end
+
+        -- VARIABLE ELEMENTS (changes each run)
+        local var = blueprint.variable_elements
+
+        -- === HOUSE VARIATIONS ===
+        if genre_key == "HOUSE" then
+            -- Hi-hat closed pattern (8ths to 16ths with variation)
+            local hat_density = randRange(var.hat_closed_density[1], var.hat_closed_density[2])
+            for step = 1, 16 do
+                if math.random() < hat_density then
+                    local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                    local velocity = randInt(var.hat_closed_velocity[1], var.hat_closed_velocity[2])
+                    genreInsertNote(take, ppq_pos, DrumMap.HIHAT_CLOSED, velocity, sixteenth_ppq * 0.9, limb_state)
+                end
+            end
+
+            -- Ghost snares (use actual snare at low velocity, not side stick)
+            for step = 1, 16 do
+                if step ~= 5 and step ~= 13 and math.random() < var.ghost_snare_chance then
+                    local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                    local velocity = randInt(var.ghost_snare_velocity[1], var.ghost_snare_velocity[2])
+                    genreInsertNote(take, ppq_pos, DrumMap.SNARE, velocity, sixteenth_ppq * 0.7, limb_state)
+                end
+            end
+
+            -- Ride layer for texture
+            if math.random() < var.ride_layer_chance then
+                for step = 1, 16, 2 do -- 8th notes
+                    local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                    local velocity = randInt(var.ride_velocity[1], var.ride_velocity[2])
+                    genreInsertNote(take, ppq_pos, DrumMap.RIDE, velocity, sixteenth_ppq * 2, limb_state)
+                end
+            end
+        end
+
+        -- === TECHNO VARIATIONS ===
+        if genre_key == "TECHNO" then
+            -- Tight 16th hat grid
+            local hat_density = randRange(var.hat_closed_density[1], var.hat_closed_density[2])
+            for step = 1, 16 do
+                if math.random() < hat_density then
+                    local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                    local velocity = randInt(var.hat_closed_velocity[1], var.hat_closed_velocity[2])
+
+                    -- Occasional accents
+                    if math.random() < var.hat_accent_chance then
+                        velocity = randInt(var.hat_accent_velocity[1], var.hat_accent_velocity[2])
+                    end
+
+                    genreInsertNote(take, ppq_pos, DrumMap.HIHAT_CLOSED, velocity, sixteenth_ppq * 0.85, limb_state)
+                end
+            end
+
+            -- Industrial rim hits
+            if math.random() < var.rim_layer_chance then
+                for step = 1, 16 do
+                    if math.random() < 0.4 then
+                        local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                        local velocity = randInt(var.rim_velocity[1], var.rim_velocity[2])
+                        genreInsertNote(take, ppq_pos, DrumMap.SIDE_STICK, velocity, sixteenth_ppq * 0.6, limb_state)
+                    end
+                end
+            end
+
+            -- Kick doubling for energy
+            if math.random() < var.kick_double_chance then
+                for _, step in ipairs({3, 7, 11, 15}) do
+                    if math.random() < 0.5 then
+                        local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                        local velocity = randInt(95, 110)
+                        genreInsertNote(take, ppq_pos, DrumMap.KICK, velocity, PPQ * 0.1, limb_state)
+                    end
+                end
+            end
+        end
+
+        -- === ELECTRO VARIATIONS ===
+        if genre_key == "ELECTRO" then
+            -- Angular hat patterns
+            local hat_density = randRange(var.hat_closed_density[1], var.hat_closed_density[2])
+            for step = 1, 16 do
+                if math.random() < hat_density then
+                    local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                    local velocity = randInt(var.hat_closed_velocity[1], var.hat_closed_velocity[2])
+                    genreInsertNote(take, ppq_pos, DrumMap.HIHAT_CLOSED, velocity, sixteenth_ppq * 0.8, limb_state)
+                end
+            end
+
+            -- Syncopated kick variations
+            if math.random() < var.kick_syncopation_chance then
+                for _, step in ipairs(var.kick_syncopation_positions) do
+                    if math.random() < 0.6 then
+                        local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                        local velocity = randInt(95, 110)
+                        genreInsertNote(take, ppq_pos, DrumMap.KICK, velocity, PPQ * 0.12, limb_state)
+                    end
+                end
+            end
+
+            -- Cowbell/rim accents
+            if math.random() < var.cowbell_chance then
+                for step = 1, 16, 4 do -- Quarter notes
+                    if math.random() < 0.7 then
+                        local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                        local velocity = randInt(var.cowbell_velocity[1], var.cowbell_velocity[2])
+                        genreInsertNote(take, ppq_pos, DrumMap.SIDE_STICK, velocity, PPQ * 0.1, limb_state)
+                    end
+                end
+            end
+
+            -- Snare rolls (fast 32nds into snare hit)
+            if math.random() < var.snare_roll_chance then
+                local roll_start = measure_end_ppq - (sixteenth_ppq * 2)
+                local thirty_second_ppq = PPQ / 8
+                for i = 0, 7 do
+                    local ppq_pos = roll_start + (i * thirty_second_ppq)
+                    local velocity = 60 + (i * 6) -- Crescendo
+                    genreInsertNote(take, ppq_pos, DrumMap.SNARE, velocity, thirty_second_ppq * 0.8, limb_state)
+                end
+            end
+        end
+
+        -- === DRUM & BASS VARIATIONS ===
+        if genre_key == "DNB" then
+            -- Amen-style break variations
+            if math.random() < var.break_variation_chance then
+                for _, step in ipairs(var.break_snare_positions) do
+                    if math.random() < 0.65 then
+                        local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                        local velocity = randInt(85, 110)
+                        genreInsertNote(take, ppq_pos, DrumMap.SNARE, velocity, sixteenth_ppq * 0.8, limb_state)
+                    end
+                end
+            end
+
+            -- Ride cymbal pattern
+            local ride_density = randRange(var.ride_density[1], var.ride_density[2])
+            for step = 1, 16 do
+                if math.random() < ride_density then
+                    local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                    local velocity = randInt(var.ride_velocity[1], var.ride_velocity[2])
+                    genreInsertNote(take, ppq_pos, DrumMap.RIDE, velocity, sixteenth_ppq * 1.5, limb_state)
+                end
+            end
+
+            -- Ghost snares (critical for DnB feel)
+            for step = 1, 16 do
+                if step ~= 9 and math.random() < var.ghost_snare_chance then
+                    local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                    local velocity = randInt(var.ghost_snare_velocity[1], var.ghost_snare_velocity[2])
+                    genreInsertNote(take, ppq_pos, DrumMap.SIDE_STICK, velocity, sixteenth_ppq * 0.6, limb_state)
+                end
+            end
+
+            -- Kick shuffle variations
+            if math.random() < var.kick_shuffle_chance then
+                for _, step in ipairs({3, 7, 13, 15}) do
+                    if math.random() < 0.5 then
+                        local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                        local velocity = randInt(90, 110)
+                        genreInsertNote(take, ppq_pos, DrumMap.KICK, velocity, PPQ * 0.12, limb_state)
+                    end
+                end
+            end
+        end
+
+        -- === JUNGLE VARIATIONS ===
+        if genre_key == "JUNGLE" then
+            -- Rapid snare chops
+            if math.random() < var.snare_chop_chance then
+                local chop_density = randRange(var.snare_chop_density[1], var.snare_chop_density[2])
+                for step = 1, 16 do
+                    if step ~= 5 and step ~= 13 and math.random() < chop_density then
+                        local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                        local velocity = randInt(70, 100)
+                        genreInsertNote(take, ppq_pos, DrumMap.SNARE, velocity, sixteenth_ppq * 0.7, limb_state)
+                    end
+                end
+            end
+
+            -- Snare rolls
+            if math.random() < var.snare_roll_chance then
+                local roll_start_step = math.random(1, 12)
+                local thirty_second_ppq = PPQ / 8
+                for i = 0, 5 do
+                    local ppq_pos = measure_start_ppq + (roll_start_step - 1) * sixteenth_ppq + (i * thirty_second_ppq)
+                    local velocity = 55 + (i * 8)
+                    genreInsertNote(take, ppq_pos, DrumMap.SNARE, velocity, thirty_second_ppq * 0.75, limb_state)
+                end
+            end
+
+            -- Shuffled hi-hat
+            local hat_density = randRange(var.hat_density[1], var.hat_density[2])
+            for step = 1, 16 do
+                if math.random() < hat_density then
+                    local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                    -- Add shuffle (swing)
+                    if step % 2 == 0 then
+                        local shuffle_amount = randRange(var.hat_shuffle_amount[1], var.hat_shuffle_amount[2])
+                        ppq_pos = ppq_pos + (sixteenth_ppq * shuffle_amount * 0.3)
+                    end
+                    local velocity = randInt(var.hat_velocity[1], var.hat_velocity[2])
+                    genreInsertNote(take, ppq_pos, DrumMap.HIHAT_CLOSED, velocity, sixteenth_ppq * 0.8, limb_state)
+                end
+            end
+
+            -- Tom fills
+            if math.random() < var.tom_fill_chance then
+                local toms = {DrumMap.TOM_HIGH, DrumMap.TOM_MID, DrumMap.TOM_LOW}
+                for i = 1, 4 do
+                    local step = 13 + (i - 1)
+                    local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                    local tom = toms[math.random(1, #toms)]
+                    local velocity = randInt(85, 110)
+                    genreInsertNote(take, ppq_pos, tom, velocity, sixteenth_ppq, limb_state)
+                end
+            end
+
+            -- Ride bell
+            if math.random() < var.ride_bell_chance then
+                for step = 1, 16, 2 do
+                    if math.random() < 0.7 then
+                        local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                        local velocity = randInt(70, 90)
+                        genreInsertNote(take, ppq_pos, DrumMap.RIDE, velocity, sixteenth_ppq * 1.5, limb_state)
+                    end
+                end
+            end
+        end
+
+        -- === HIP HOP VARIATIONS ===
+        if genre_key == "HIPHOP" then
+            -- Swing/shuffle
+            local swing_amount = randRange(var.swing_amount[1], var.swing_amount[2])
+
+            -- Hi-hat pattern with swing
+            local hat_density = randRange(var.hat_density[1], var.hat_density[2])
+            for step = 1, 16 do
+                if math.random() < hat_density then
+                    local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                    -- Apply swing to offbeats
+                    if step % 2 == 0 then
+                        ppq_pos = ppq_pos + (sixteenth_ppq * (swing_amount - 0.5) * 0.4)
+                    end
+                    -- Laid back timing
+                    ppq_pos = ppq_pos + randRange(var.laid_back_timing[1], var.laid_back_timing[2])
+
+                    local velocity = randInt(60, 80)
+                    genreInsertNote(take, ppq_pos, DrumMap.HIHAT_CLOSED, velocity, sixteenth_ppq * 0.9, limb_state)
+                end
+            end
+
+            -- Open hat variations
+            if math.random() < var.hat_open_chance then
+                for step = 1, 16, 4 do
+                    if math.random() < 0.6 then
+                        local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                        local velocity = randInt(75, 95)
+                        genreInsertNote(take, ppq_pos, DrumMap.HIHAT_OPEN, velocity, PPQ * 0.3, limb_state)
+                    end
+                end
+            end
+
+            -- Ghost snares (signature hip hop)
+            for step = 1, 16 do
+                if step ~= 5 and step ~= 13 and math.random() < var.ghost_snare_chance then
+                    local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                    ppq_pos = ppq_pos + randRange(var.laid_back_timing[1], var.laid_back_timing[2])
+                    local velocity = randInt(var.ghost_snare_velocity[1], var.ghost_snare_velocity[2])
+                    genreInsertNote(take, ppq_pos, DrumMap.SIDE_STICK, velocity, sixteenth_ppq * 0.7, limb_state)
+                end
+            end
+
+            -- Kick doubling
+            if math.random() < var.kick_double_chance then
+                for _, step in ipairs({2, 7, 11}) do
+                    if math.random() < 0.6 then
+                        local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                        local velocity = randInt(90, 110)
+                        genreInsertNote(take, ppq_pos, DrumMap.KICK, velocity, PPQ * 0.12, limb_state)
+                    end
+                end
+            end
+
+            -- Rimshot snare
+            if math.random() < var.rimshot_snare_chance then
+                for _, step in ipairs({5, 13}) do
+                    if math.random() < 0.5 then
+                        local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                        local velocity = randInt(85, 105)
+                        genreInsertNote(take, ppq_pos, DrumMap.SNARE_ACCENT, velocity, PPQ * 0.12, limb_state)
+                    end
+                end
+            end
+        end
+
+        -- === TRAP VARIATIONS ===
+        if genre_key == "TRAP" then
+            -- Rapid hi-hat rolls (signature trap element)
+            if math.random() < var.hat_roll_chance then
+                local roll_start_step = math.random(1, 13)
+                local roll_speed = var.hat_roll_speed[math.random(1, 2)] -- 16th or 32nd
+                local roll_length = randInt(var.hat_roll_length[1], var.hat_roll_length[2])
+                local roll_tick = PPQ / roll_speed
+
+                for i = 0, roll_length - 1 do
+                    local ppq_pos = measure_start_ppq + (roll_start_step - 1) * sixteenth_ppq + (i * roll_tick)
+                    if ppq_pos < measure_end_ppq then
+                        local velocity = randInt(var.hat_roll_velocity[1], var.hat_roll_velocity[2])
+                        -- Crescendo effect
+                        velocity = velocity + (i * 3)
+                        velocity = math.min(127, velocity)
+                        genreInsertNote(take, ppq_pos, DrumMap.HIHAT_CLOSED, velocity, roll_tick * 0.8, limb_state)
+                    end
+                end
+            end
+
+            -- Triplet hat patterns
+            if math.random() < var.hat_triplet_chance then
+                for beat = 1, 4 do
+                    if math.random() < 0.6 then
+                        local beat_ppq = measure_start_ppq + (beat - 1) * PPQ
+                        local triplet_tick = PPQ / 3
+                        for i = 0, 2 do
+                            local ppq_pos = beat_ppq + (i * triplet_tick)
+                            local velocity = randInt(70, 90)
+                            genreInsertNote(take, ppq_pos, DrumMap.HIHAT_CLOSED, velocity, triplet_tick * 0.85, limb_state)
+                        end
+                    end
+                end
+            end
+
+            -- 808 kick pattern variations
+            if math.random() < var.kick_pattern_variation then
+                for _, step in ipairs(var.kick_extra_positions) do
+                    if math.random() < 0.4 then
+                        local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                        local velocity = randInt(105, 120)
+                        genreInsertNote(take, ppq_pos, DrumMap.KICK, velocity, PPQ * 0.18, limb_state)
+                    end
+                end
+            end
+
+            -- Layered snares
+            if math.random() < var.snare_layer_chance then
+                local ppq_pos = measure_start_ppq + 8 * sixteenth_ppq -- Step 9
+                local velocity = randInt(95, 110)
+                genreInsertNote(take, ppq_pos, DrumMap.SNARE_ACCENT, velocity, PPQ * 0.12, limb_state)
+            end
+
+            -- Open hat accents
+            if math.random() < var.hat_open_accent_chance then
+                for step = 1, 16, 4 do
+                    if math.random() < 0.7 then
+                        local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                        local velocity = randInt(90, 110)
+                        genreInsertNote(take, ppq_pos, DrumMap.HIHAT_OPEN, velocity, PPQ * 0.4, limb_state)
+                    end
+                end
+            end
+        end
+    end
+
+    reaper.MIDI_Sort(take)
+    reaper.UpdateItemInProject(new_item)
+    reaper.Undo_EndBlock("jtp gen: DWUMMER " .. blueprint.name .. " Mode", -1)
+
+    if DEBUG then
+        reaper.ShowConsoleMsg(string.format("DWUMMER: Generated %s pattern with infinite variation\n", blueprint.name))
+    end
 end
 
 -- =============================
@@ -1748,6 +2455,35 @@ function main()
     elseif mode_choice == 3 then
         -- Zach Hill Mode
         generate_zach_hill_pattern()
+        return
+    -- Genre modes (choice 4 is separator, skip it)
+    elseif mode_choice == 5 then
+        -- House
+        generate_genre_pattern("HOUSE")
+        return
+    elseif mode_choice == 6 then
+        -- Techno
+        generate_genre_pattern("TECHNO")
+        return
+    elseif mode_choice == 7 then
+        -- Electro
+        generate_genre_pattern("ELECTRO")
+        return
+    elseif mode_choice == 8 then
+        -- Drum & Bass
+        generate_genre_pattern("DNB")
+        return
+    elseif mode_choice == 9 then
+        -- Jungle
+        generate_genre_pattern("JUNGLE")
+        return
+    elseif mode_choice == 10 then
+        -- Hip Hop
+        generate_genre_pattern("HIPHOP")
+        return
+    elseif mode_choice == 11 then
+        -- Trap
+        generate_genre_pattern("TRAP")
         return
     end
 

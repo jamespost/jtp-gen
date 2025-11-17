@@ -1183,25 +1183,47 @@ local GenreBlueprints = {
 
     DNB = {
         name = "Drum & Bass",
-        bpm_range = {170, 180},
+        bpm_range = {170, 175},
         core_patterns = {
-            -- 2-step kick pattern (1 & 3 or variations)
-            kick = {steps = {1, 11}, velocity = {100, 120}}, -- Basic 2-step
-            -- Signature DnB snare on 3rd beat (step 9)
-            snare = {steps = {9}, velocity = {105, 120}},
+            -- CORRECT DnB pattern: Snare on beats 2 & 4 (steps 5 & 13)
+            -- Kick on beat 1 (step 1) + syncopated kick before beat 3
+
+            -- Neuro/Modern DnB: K--- S--- -K-- S--- (kick on 1, kick on "a" of 2, snares on 2 & 4)
+            kick_neuro = {steps = {1, 8}, velocity = {100, 120}}, -- Most common
+
+            -- Jungle-influenced: K--K S--- -K-- S--- (kick on 1, "e" of 1, "a" of 2)
+            kick_jungle = {steps = {1, 2, 8}, velocity = {95, 115}},
+
+            -- Liquid: K--- S--- --K- S--- (kick on 1, "&" of 2, snares on 2 & 4)
+            kick_liquid = {steps = {1, 7}, velocity = {100, 120}},
+
+            -- Default to Neuro pattern
+            kick = {steps = {1, 8}, velocity = {100, 120}},
+
+            -- RIGID snare backbeat on beats 2 & 4 (steps 5 & 13)
+            snare = {steps = {5, 13}, velocity = {105, 120}},
         },
         variable_elements = {
-            -- Amen-style break variations
-            break_variation_chance = 0.80, -- High probability of complex breaks
-            break_snare_positions = {3, 6, 9, 11, 14}, -- Possible break hits
-            -- Ride cymbal pattern
+            -- Style variation (Neuro 50%, Liquid 30%, Jungle 20%)
+            style_variation_chance = 0.50, -- Chance to switch from default Neuro
+            jungle_chance = 0.20, -- Within variations, 20% jungle
+
+            -- Amen-style break variations (avoid main snares at 5 & 13)
+            break_variation_chance = 0.65,
+            break_snare_positions = {3, 6, 9, 10, 11, 14}, -- Possible break hits
+
+            -- Ghost kicks (quiet, irregular)
+            ghost_kick_chance = 0.25,
+            ghost_kick_velocity = {40, 60},
+            ghost_kick_positions = {3, 4, 11, 12, 15}, -- Between main kicks
+
+            -- Ride cymbal pattern (8ths or 16ths)
             ride_density = {0.50, 0.75},
             ride_velocity = {70, 90},
-            -- Ghost snares (critical for DnB feel)
-            ghost_snare_chance = 0.60,
-            ghost_snare_velocity = {35, 55},
-            -- Kick pattern variations
-            kick_shuffle_chance = 0.50,
+
+            -- Ghost snares (light texture)
+            ghost_snare_chance = 0.40,
+            ghost_snare_velocity = {30, 50},
         }
     },
 
@@ -1540,18 +1562,50 @@ function generate_genre_pattern(genre_key)
 
         -- === DRUM & BASS VARIATIONS ===
         if genre_key == "DNB" then
-            -- Amen-style break variations
-            if math.random() < var.break_variation_chance then
-                for _, step in ipairs(var.break_snare_positions) do
-                    if math.random() < 0.65 then
+            -- Choose DnB style: Neuro (50%), Liquid (30%), Jungle (20%)
+            local kick_pattern
+            if math.random() < var.style_variation_chance then
+                -- Vary the style (50% of time)
+                if math.random() < var.jungle_chance then
+                    kick_pattern = blueprint.core_patterns.kick_jungle -- Jungle: busier kicks
+                else
+                    kick_pattern = blueprint.core_patterns.kick_liquid -- Liquid: cleaner
+                end
+            else
+                -- Default Neuro style (50% of time)
+                kick_pattern = blueprint.core_patterns.kick_neuro
+            end
+
+            -- Apply chosen kick pattern (overriding the initial core kick)
+            for _, step in ipairs(kick_pattern.steps) do
+                local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                local velocity = randInt(kick_pattern.velocity[1], kick_pattern.velocity[2])
+                genreInsertNote(take, ppq_pos, DrumMap.KICK, velocity, PPQ * 0.12, limb_state)
+            end
+
+            -- Ghost kicks (quiet, irregular, between main kicks)
+            if math.random() < var.ghost_kick_chance then
+                for _, step in ipairs(var.ghost_kick_positions) do
+                    if math.random() < 0.4 then
                         local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
-                        local velocity = randInt(85, 110)
-                        genreInsertNote(take, ppq_pos, DrumMap.SNARE, velocity, sixteenth_ppq * 0.8, limb_state)
+                        local velocity = randInt(var.ghost_kick_velocity[1], var.ghost_kick_velocity[2])
+                        genreInsertNote(take, ppq_pos, DrumMap.KICK, velocity, PPQ * 0.1, limb_state)
                     end
                 end
             end
 
-            -- Ride cymbal pattern
+            -- Amen-style break snare variations (avoiding main snare at step 9)
+            if math.random() < var.break_variation_chance then
+                for _, step in ipairs(var.break_snare_positions) do
+                    if math.random() < 0.55 then
+                        local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
+                        local velocity = randInt(80, 105)
+                        genreInsertNote(take, ppq_pos, DrumMap.SNARE, velocity, sixteenth_ppq * 0.75, limb_state)
+                    end
+                end
+            end
+
+            -- Ride cymbal pattern (continuous 8th or 16th notes)
             local ride_density = randRange(var.ride_density[1], var.ride_density[2])
             for step = 1, 16 do
                 if math.random() < ride_density then
@@ -1561,23 +1615,12 @@ function generate_genre_pattern(genre_key)
                 end
             end
 
-            -- Ghost snares (critical for DnB feel)
+            -- Ghost snares / side-stick (critical for DnB texture)
             for step = 1, 16 do
                 if step ~= 9 and math.random() < var.ghost_snare_chance then
                     local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
                     local velocity = randInt(var.ghost_snare_velocity[1], var.ghost_snare_velocity[2])
                     genreInsertNote(take, ppq_pos, DrumMap.SIDE_STICK, velocity, sixteenth_ppq * 0.6, limb_state)
-                end
-            end
-
-            -- Kick shuffle variations
-            if math.random() < var.kick_shuffle_chance then
-                for _, step in ipairs({3, 7, 13, 15}) do
-                    if math.random() < 0.5 then
-                        local ppq_pos = measure_start_ppq + (step - 1) * sixteenth_ppq
-                        local velocity = randInt(90, 110)
-                        genreInsertNote(take, ppq_pos, DrumMap.KICK, velocity, PPQ * 0.12, limb_state)
-                    end
                 end
             end
         end

@@ -219,138 +219,413 @@ local function table_contains(t, x)
     return false
 end
 
--- Zach Hill Polyphonic Melody Mode (function definition placed early for availability)
--- Chaotic virtuosic melodic generator inspired by drummer adaptation.
+-- Zach Hill Polyphonic Melody Mode - REWRITTEN v2.0
+-- Rhythmic Engine: Identical to DWUMMER Zach Hill Mode (bursts, doubles, paradiddles, riffs, physical constraints)
+-- Melodic Engine: Sequencer-style note selection (repetitive patterns, stepwise motion, octave range)
 local function generate_zach_hill_polyphonic(take, start_time, end_time, scale_notes, num_voices, measures, min_keep, max_keep, quarter_note)
     local function clamp(v,lo,hi) return math.max(lo, math.min(hi, v)) end
+
+    -- =============================
+    -- PERSISTENCE & CONFIGURATION
+    -- =============================
     local EXT_ZACH = 'jtp_gen_melody_zach'
-    local function get_zach(key, def) local v = reaper.GetExtState(EXT_ZACH, key); if v=='' then return def end return tonumber(v) or def end
-    local function set_zach(key,val) reaper.SetExtState(EXT_ZACH, key, tostring(val), true) end
-    local BURST_CHANCE        = get_zach('burst_chance', 0.25)
-    local DOUBLE_CHANCE       = get_zach('double_chance', 0.25)
-    local PARADIDDLE_CHANCE   = get_zach('paradiddle_chance', 0.25)
-    local FOCUSED_RIFF_CHANCE = get_zach('focused_riff_chance', 0.30)
-    local RANDOM_ACCENT_CHANCE= get_zach('random_accent_chance', 0.60)
-    local SUBDIVS_MAX         = get_zach('subdivs_max', 3)
-
-    local paradiddle_seq = {1,2,1,1,2,1,2,2}
-    local total_measures = measures
-    local measure_len = quarter_note * 4
-
-    local voice_last_pitch = {}
-    local voice_last_time  = {}
-    local function safe_pitch(voice, pitch, t)
-        local prev = voice_last_pitch[voice]
-        local prev_t = voice_last_time[voice]
-        if not prev then return pitch end
-        local dt = t - prev_t
-        local interval = math.abs(pitch - prev)
-        if dt < 0.12 and interval > 4 then
-            if pitch > prev then pitch = prev + 4 else pitch = prev - 4 end
-        end
-        return pitch
+    local function get_zach(key, def)
+        local v = reaper.GetExtState(EXT_ZACH, key)
+        if v=='' then return def end
+        return tonumber(v) or def
     end
-    local function insert_note(ppq_s, ppq_e, voice, pitch, vel)
-        reaper.MIDI_InsertNote(take, false, false, ppq_s, ppq_e, voice, pitch, vel, false)
-        voice_last_pitch[voice] = pitch
-        voice_last_time[voice] = reaper.MIDI_GetProjTimeFromPPQPos(take, ppq_s)
+    local function set_zach(key,val)
+        reaper.SetExtState(EXT_ZACH, key, tostring(val), true)
     end
+
+    -- DWUMMER Zach Hill rhythm parameters (adaptive)
+    local BURST_CHANCE        = get_zach('burst_chance', 0.250)
+    local DOUBLE_CHANCE       = get_zach('double_chance', 0.250)
+    local PARADIDDLE_CHANCE   = get_zach('paradiddle_chance', 0.250)
+    local FOCUSED_RIFF_CHANCE = get_zach('focused_riff_chance', 0.300)
+    local ANCHOR_DOWNBEAT_CHANCE = get_zach('anchor_downbeat_chance', 0.300)
+    local RANDOM_BEAT_ACCENT_CHANCE = get_zach('random_accent_chance', 0.600)
+    local SUBDIVS_MAX         = get_zach('subdivs_max', 2) -- 1-3 for melodic context
+    local SUBDIVS_MIN         = 1
+
+    -- Zach Hill phrasing: 3 bars riff + 1 bar fill
+    local PHRASE_LENGTH = 4
+    local REPEAT_BARS = 3
+
+    -- Density controls
+    local MIN_NOTES_PER_MEASURE = 12 -- Ensure activity
+    local TEXTURE_LAYER_CHANCE = 0.85 -- High chance for dense melodic texture
+
+    -- =============================
+    -- PPQ & TIME UTILITIES
+    -- =============================
+    local PPQ = 960
     local function timeToPPQ(t) return reaper.MIDI_GetPPQPosFromProjTime(take, t) end
-    local function choose_subset(size)
-        local pool = {table.unpack(scale_notes)}
-        local out = {}
-        for i=1,size do if #pool==0 then break end local idx = math.random(1,#pool); out[#out+1]=pool[idx]; table.remove(pool,idx) end
-        table.sort(out); return out
-    end
-    local function dyn_vel(measure_idx, accent, rapid_dt)
-        local base = 70 + math.floor((measure_idx/total_measures)*25)
-        if accent then base = base + 20 end
-        if rapid_dt and rapid_dt < 0.15 then base = base - 15 end
-        return clamp(base + math.random(-8,8), 20, 127)
+    local function ppqToTime(ppq) return reaper.MIDI_GetProjTimeFromPPQPos(take, ppq) end
+
+    local start_ppq = timeToPPQ(start_time)
+    local end_ppq = timeToPPQ(end_time)
+    local total_ppq = end_ppq - start_ppq
+
+    local time_sig_num, _ = reaper.TimeMap_GetTimeSigAtTime(0, start_time)
+    local measure_len_ppq = time_sig_num * PPQ
+    local num_measures = math.floor(total_ppq / measure_len_ppq)
+
+    -- =============================
+    -- MELODIC SEQUENCER ENGINE
+    -- =============================
+    -- Infer sequencer style from register
+    local avg_note = scale_notes[math.floor(#scale_notes / 2)]
+    local seq_style
+    if avg_note < 48 then seq_style = 'bass'
+    elseif avg_note < 72 then seq_style = 'lead'
+    else seq_style = 'arp' end
+
+    -- Sequencer parameters by style (like synth sequencer mode)
+    local range_limit, vel_base, vel_range
+    if seq_style == 'bass' then
+        range_limit = math.min(5, #scale_notes) -- Stay within 5 scale degrees
+        vel_base, vel_range = 95, 20 -- Punchy
+    elseif seq_style == 'lead' then
+        range_limit = math.min(9, #scale_notes) -- More melodic freedom
+        vel_base, vel_range = 85, 25 -- Dynamic variation
+    else -- arpeggio
+        range_limit = math.min(12, #scale_notes) -- Full range
+        vel_base, vel_range = 75, 20 -- Consistent
     end
 
-    local cur_measure_start = start_time
-    for m=1,total_measures do
-        local ms_start_ppq = timeToPPQ(cur_measure_start)
-        -- Downbeat triad anchor
-        local root_idx = math.random(1,#scale_notes)
-        local triad = { scale_notes[root_idx], scale_notes[math.min(#scale_notes, root_idx+2)], scale_notes[math.min(#scale_notes, root_idx+4)] }
-        for v=0, math.min(num_voices-1, #triad-1) do
-            insert_note(ms_start_ppq, ms_start_ppq + timeToPPQ(quarter_note*0.9), v, triad[v+1], dyn_vel(m,true,nil))
-        end
-        if math.random() < RANDOM_ACCENT_CHANCE then
-            local acc_beat = math.random(2,4)
-            local acc_ppq = ms_start_ppq + timeToPPQ((acc_beat-1)*quarter_note)
-            for v=0, math.min(num_voices-1,2) do
-                local pitch = scale_notes[math.random(1,#scale_notes)]
-                insert_note(acc_ppq, acc_ppq + timeToPPQ(quarter_note*0.5), v, pitch, dyn_vel(m,true,nil))
+    -- Scale degree index tracking per voice
+    local voice_scale_idx = {}
+    for v = 0, num_voices - 1 do
+        voice_scale_idx[v] = math.random(1, math.min(range_limit, #scale_notes))
+    end
+
+    -- Choose melodic note with sequencer logic
+    local function choose_sequencer_note(voice_id, style)
+        local current_idx = voice_scale_idx[voice_id]
+        local move
+
+        if style == 'bass' then
+            -- Bass: root-fifth motion, occasional passing tones
+            move = ({0, 0, 0, 4, 4, 1, -1})[math.random(1, 7)] -- Bias to root/fifth
+        elseif style == 'lead' then
+            -- Lead: stepwise with occasional leaps
+            if math.random() < 0.7 then
+                move = ({-1, 0, 1})[math.random(1, 3)] -- Stepwise
+            else
+                move = ({-3, -2, 2, 3})[math.random(1, 4)] -- Small leaps
             end
+        else -- arp
+            -- Arpeggio: systematic triadic motion
+            move = ({-4, -2, 0, 2, 4})[math.random(1, 5)] -- Triadic intervals
         end
-        local riff_subset, riff_mode
-        if math.random() < FOCUSED_RIFF_CHANCE then riff_subset = choose_subset(math.random(3,4)); riff_mode = true end
-        for beat=1,4 do
-            local subdivs = math.random(1,SUBDIVS_MAX)
-            local ticks = quarter_note / subdivs
-            for s=1,subdivs do
-                local sub_start = cur_measure_start + (beat-1)*quarter_note + (s-1)*ticks
-                local sub_dur = ticks * (math.random(6,9)/10)
-                local sub_end = sub_start + sub_dur
-                local ppq_s = timeToPPQ(sub_start)
-                local ppq_e = timeToPPQ(sub_end)
-                if riff_mode then
-                    local pitch = riff_subset[((m+beat+s)%#riff_subset)+1]
-                    pitch = safe_pitch((beat+s)%num_voices, pitch, sub_start)
-                    insert_note(ppq_s, ppq_e, (beat+s)%num_voices, pitch, dyn_vel(m,false,sub_dur))
-                else
-                    if math.random() < BURST_CHANCE then
-                        local burst_subset = choose_subset(5)
-                        local count = 6
-                        for b=1,count do
-                            local bt = sub_start + sub_dur*(b-1)/count
-                            local pitch = burst_subset[((b <= count/2) and b or (count-b+1))]
-                            pitch = safe_pitch(b%num_voices, pitch, bt)
-                            local ppq_bt = timeToPPQ(bt)
-                            insert_note(ppq_bt, ppq_bt + timeToPPQ(sub_dur/count*0.8), b%num_voices, pitch, dyn_vel(m,false,sub_dur/count))
-                        end
-                    elseif math.random() < DOUBLE_CHANCE then
-                        local pitch = scale_notes[math.random(1,#scale_notes)]
-                        local mid_ppq = ppq_s + (ppq_e - ppq_s)*0.35
-                        pitch = safe_pitch(beat%num_voices, pitch, sub_start)
-                        insert_note(ppq_s, mid_ppq, beat%num_voices, pitch, dyn_vel(m,false,sub_dur))
-                        insert_note(mid_ppq, ppq_e, beat%num_voices, pitch, dyn_vel(m,false,sub_dur*0.35))
-                    elseif math.random() < PARADIDDLE_CHANCE then
-                        local subset = choose_subset(2)
-                        local stroke_dur = sub_dur / #paradiddle_seq
-                        for idx, sel in ipairs(paradiddle_seq) do
-                            local t = sub_start + (idx-1)*stroke_dur
-                            local p = safe_pitch((beat+idx)%num_voices, subset[sel], t)
-                            local ppq_st = timeToPPQ(t)
-                            insert_note(ppq_st, ppq_st + timeToPPQ(stroke_dur*0.85), (beat+idx)%num_voices, p, dyn_vel(m,false,stroke_dur))
-                        end
-                    else
-                        local pitch = scale_notes[math.random(1,#scale_notes)]
-                        pitch = safe_pitch(beat%num_voices, pitch, sub_start)
-                        insert_note(ppq_s, ppq_e, beat%num_voices, pitch, dyn_vel(m,false,sub_dur))
+
+        -- Update and clamp to range
+        current_idx = clamp(current_idx + move, 1, math.min(range_limit, #scale_notes))
+        voice_scale_idx[voice_id] = current_idx
+
+        return scale_notes[current_idx]
+    end
+
+    -- Choose note from focused riff subset (for focused riff mode)
+    local function choose_riff_note(riff_subset, idx)
+        return riff_subset[((idx % #riff_subset) + 1)]
+    end
+
+    -- =============================
+    -- PHYSICAL CONSTRAINT ENGINE (from DWUMMER)
+    -- =============================
+    local HUMANIZE_MS = 3 -- Subtle timing humanization
+    local MIN_VOICE_INTERVAL = 0.015 -- Minimum time between notes on same voice (like hand movement)
+
+    local voice_state = {}
+    for v = 0, num_voices - 1 do
+        voice_state[v] = {
+            last_note_time = nil,
+            last_pitch = nil
+        }
+    end
+
+    local function can_voice_play(voice_id, requested_time)
+        local st = voice_state[voice_id]
+        if not st.last_note_time then return true end
+        local dt = requested_time - st.last_note_time
+        return dt >= MIN_VOICE_INTERVAL
+    end
+
+    -- Dynamic velocity (from DWUMMER logic)
+    local function get_dynamic_velocity(voice_id, note_time, measure_idx, accent, is_rapid)
+        local base = vel_base
+
+        -- Build intensity through measures
+        base = base + math.floor((measure_idx / num_measures) * 15)
+
+        -- Accent boost
+        if accent then base = base + 20 end
+
+        -- Rapid notes are quieter
+        if is_rapid then base = base - 15 end
+
+        -- Randomization
+        base = base + math.random(-8, 8)
+
+        return clamp(base, 20, 127)
+    end
+
+    -- Insert note with humanization and physical constraints
+    local function insert_melodic_note(ppq_pos, voice_id, pitch, velocity, duration_ppq)
+        local note_time = ppqToTime(ppq_pos)
+        local humanize_offset = (math.random() * 2 - 1) * (HUMANIZE_MS / 1000)
+        local final_time = note_time + humanize_offset
+
+        -- Check physical constraint
+        if not can_voice_play(voice_id, final_time) then
+            return false -- Can't play this note
+        end
+
+        -- Insert note
+        local ppq_with_offset = timeToPPQ(final_time)
+        local note_off = ppq_with_offset + duration_ppq
+        reaper.MIDI_InsertNote(take, false, false, ppq_with_offset, note_off, voice_id, pitch, velocity, false)
+
+        -- Update voice state
+        voice_state[voice_id].last_note_time = final_time
+        voice_state[voice_id].last_pitch = pitch
+
+        return true
+    end
+
+    -- =============================
+    -- RHYTHM PATTERN FUNCTIONS (from DWUMMER)
+    -- =============================
+
+    -- Burst pattern: rapid cluster of notes
+    local function insert_burst(measure_ppq, sub_tick, measure_end_ppq, voice_id, measure_idx, seq_style)
+        local BURST_NOTES = 6
+        local burst_subset = {}
+        for i = 1, 5 do
+            table.insert(burst_subset, choose_sequencer_note(voice_id, seq_style))
+        end
+
+        local sub_dur_ppq = math.floor(PPQ / 4) -- 16th note space
+        local note_spacing = math.floor(sub_dur_ppq / (BURST_NOTES + 1))
+
+        for b = 1, BURST_NOTES do
+            local bt_ppq = sub_tick + (b - 1) * note_spacing
+            if bt_ppq >= measure_end_ppq then break end
+
+            -- Mirrored pitch selection (like original)
+            local pitch_idx = (b <= BURST_NOTES/2) and b or (BURST_NOTES - b + 1)
+            local pitch = burst_subset[math.min(pitch_idx, #burst_subset)]
+
+            local velocity = get_dynamic_velocity(voice_id, ppqToTime(bt_ppq), measure_idx, false, true)
+            local duration = math.floor(note_spacing * 0.8)
+
+            insert_melodic_note(bt_ppq, voice_id, pitch, velocity, duration)
+        end
+    end
+
+    -- Double stroke: same note hit twice quickly
+    local function insert_double_stroke(sub_tick, voice_id, measure_idx, seq_style)
+        local pitch = choose_sequencer_note(voice_id, seq_style)
+        local spacing = math.floor(PPQ / 16) -- 32nd note spacing
+        local duration = math.floor(spacing * 0.85)
+
+        local velocity = get_dynamic_velocity(voice_id, ppqToTime(sub_tick), measure_idx, false, false)
+
+        insert_melodic_note(sub_tick, voice_id, pitch, velocity, duration)
+        insert_melodic_note(sub_tick + spacing, voice_id, pitch, velocity, duration)
+    end
+
+    -- Paradiddle pattern: 8-stroke rudiment with two pitches (L R L L R L R R)
+    local function insert_paradiddle(sub_tick, voice_id, measure_idx, seq_style)
+        local paradiddle_seq = {1, 2, 1, 1, 2, 1, 2, 2} -- Pitch alternation pattern
+        local subset = {
+            choose_sequencer_note(voice_id, seq_style),
+            choose_sequencer_note(voice_id, seq_style)
+        }
+
+        local sub_dur_ppq = math.floor(PPQ / 4) -- 16th note space
+        local stroke_spacing = math.floor(sub_dur_ppq / #paradiddle_seq)
+
+        for idx, pitch_sel in ipairs(paradiddle_seq) do
+            local stroke_ppq = sub_tick + (idx - 1) * stroke_spacing
+            local pitch = subset[pitch_sel]
+            local velocity = get_dynamic_velocity(voice_id, ppqToTime(stroke_ppq), measure_idx, false, false)
+            local duration = math.floor(stroke_spacing * 0.85)
+
+            insert_melodic_note(stroke_ppq, voice_id, pitch, velocity, duration)
+        end
+    end
+
+    -- Focused riff: repetitive pattern with subset of notes (Zach Hill signature)
+    local function insert_focused_riff(measure_start_ppq, measure_end_ppq, riff_spec, voice_id, measure_idx, seq_style)
+        local riff_subset = riff_spec.subset
+        local pattern_length = riff_spec.pattern_length
+
+        local total_space = measure_end_ppq - measure_start_ppq
+        local spacing = math.max(1, math.floor(total_space / (pattern_length * 3)))
+        local duration = math.floor(spacing * 0.9)
+
+        local pos = measure_start_ppq
+        local idx = 0
+
+        while pos < measure_end_ppq do
+            for p = 1, pattern_length do
+                idx = idx + 1
+                local insert_pos = pos + (p - 1) * spacing
+                if insert_pos >= measure_end_ppq then break end
+
+                -- Primary stroke
+                local pitch = choose_riff_note(riff_subset, idx)
+                local velocity = get_dynamic_velocity(voice_id, ppqToTime(insert_pos), measure_idx, false, false)
+
+                insert_melodic_note(insert_pos, voice_id, pitch, velocity, duration)
+
+                -- Optional interstitial stroke (avoid linearity)
+                if math.random() < 0.5 then
+                    local inter_pos = insert_pos + math.floor(spacing * 0.5)
+                    if inter_pos < measure_end_ppq then
+                        local inter_pitch = choose_riff_note(riff_subset, idx + 1)
+                        local inter_vel = get_dynamic_velocity(voice_id, ppqToTime(inter_pos), measure_idx, false, true)
+                        insert_melodic_note(inter_pos, voice_id, inter_pitch, inter_vel, math.floor(duration * 0.8))
                     end
                 end
             end
+            pos = pos + (pattern_length * spacing)
         end
-        cur_measure_start = cur_measure_start + measure_len
     end
-    -- Prune to target keep range
-    local _, cnt = reaper.MIDI_CountEvts(take)
-    local target = math.random(math.floor(min_keep), math.floor(max_keep))
-    if cnt > target then
-        local to_remove = cnt - target
-        for i=cnt-1,0,-1 do if to_remove<=0 then break end reaper.MIDI_DeleteNote(take,i) to_remove = to_remove - 1 end
+
+    -- Chaotic fill: dense tom/snare activity (for fill bars)
+    local function insert_chaos_fill(measure_start_ppq, measure_end_ppq, voice_id, measure_idx, seq_style)
+        -- First half: anchor
+        local anchor_pitch = choose_sequencer_note(voice_id, seq_style)
+        local anchor_vel = get_dynamic_velocity(voice_id, ppqToTime(measure_start_ppq), measure_idx, true, false)
+        insert_melodic_note(measure_start_ppq, voice_id, anchor_pitch, anchor_vel, math.floor(PPQ * 0.9))
+
+        -- Second half: burst clusters
+        local fill_start = measure_start_ppq + math.floor((time_sig_num - 1) * PPQ)
+        local cur = fill_start
+
+        while cur < measure_end_ppq do
+            local remaining = measure_end_ppq - cur
+            local subdivs = math.max(3, SUBDIVS_MAX)
+            local ticks_per_sub = math.max(1, math.floor(PPQ / subdivs))
+
+            if math.random() < 0.6 then
+                -- Burst cluster
+                local cluster_size = math.min(8, math.floor(remaining / math.max(1, ticks_per_sub / 5)))
+                for i = 0, cluster_size - 1 do
+                    local pos = cur + i * math.floor(ticks_per_sub / (cluster_size + 1))
+                    if pos >= measure_end_ppq then break end
+
+                    local pitch = choose_sequencer_note(voice_id, seq_style)
+                    local velocity = get_dynamic_velocity(voice_id, ppqToTime(pos), measure_idx, false, true)
+                    local duration = math.floor((ticks_per_sub / (cluster_size + 1)) * 0.8)
+
+                    insert_melodic_note(pos, voice_id, pitch, velocity, duration)
+                end
+            else
+                -- Paradiddle figure
+                insert_paradiddle(cur, voice_id, measure_idx, seq_style)
+            end
+
+            cur = cur + ticks_per_sub
+        end
+
+        -- Strong ending: accent on last note
+        local end_pos = measure_end_ppq - math.floor(PPQ * 0.05)
+        local end_pitch = scale_notes[1] -- Resolve to tonic
+        local end_vel = get_dynamic_velocity(voice_id, ppqToTime(end_pos), measure_idx, true, false)
+        insert_melodic_note(end_pos, voice_id, end_pitch, end_vel, math.floor(PPQ * 0.4))
     end
-    -- Resolution chord (tonic)
-    local tonic = scale_notes[1]
-    local resolve_ppq = reaper.MIDI_GetPPQPosFromProjTime(take, end_time - quarter_note*0.5)
-    for v=0, math.min(num_voices-1,2) do
-        reaper.MIDI_InsertNote(take,false,false, resolve_ppq, resolve_ppq + reaper.MIDI_GetPPQPosFromProjTime(take, reaper.MIDI_GetProjTimeFromPPQPos(take, resolve_ppq) + quarter_note*0.4), v, tonic, 100, false)
+
+    -- =============================
+    -- MAIN GENERATION LOOP (DWUMMER structure)
+    -- =============================
+
+    -- Generate riff spec for phrase repetition
+    local function generate_riff_spec(seq_style)
+        local subset = {}
+        for i = 1, math.random(2, 3) do
+            table.insert(subset, choose_sequencer_note(0, seq_style))
+        end
+        return {
+            subset = subset,
+            pattern_length = math.random(3, 5)
+        }
     end
+
+    local measure_start_ppq = start_ppq
+    local riff_spec = nil
+
+    for m = 1, num_measures do
+        local measure_end_ppq = measure_start_ppq + measure_len_ppq
+
+        -- Determine phrase position (1..PHRASE_LENGTH)
+        local phrase_pos = ((m - 1) % PHRASE_LENGTH) + 1
+
+        -- Anchor downbeat (like DWUMMER)
+        if math.random() < ANCHOR_DOWNBEAT_CHANCE then
+            local anchor_pitch = choose_sequencer_note(0, seq_style)
+            local anchor_vel = get_dynamic_velocity(0, ppqToTime(measure_start_ppq), m, true, false)
+            insert_melodic_note(measure_start_ppq, 0, anchor_pitch, anchor_vel, math.floor(PPQ * 0.9))
+        end
+
+        -- Random beat accent
+        if math.random() < RANDOM_BEAT_ACCENT_CHANCE then
+            local random_beat_idx = math.random(1, time_sig_num)
+            local random_beat_ppq = measure_start_ppq + (random_beat_idx - 1) * PPQ
+            local accent_pitch = choose_sequencer_note(0, seq_style)
+            local accent_vel = get_dynamic_velocity(0, ppqToTime(random_beat_ppq), m, true, false)
+            insert_melodic_note(random_beat_ppq, 0, accent_pitch, accent_vel, math.floor(PPQ * 0.5))
+        end
+
+        -- Texture layer: 8th note melodic scaffold (like DWUMMER hat layer)
+        if math.random() < TEXTURE_LAYER_CHANCE then
+            local eighth_ticks = math.floor(PPQ * 0.5)
+            local t = measure_start_ppq
+            while t < measure_end_ppq do
+                local pitch = choose_sequencer_note(1, seq_style)
+                local vel = get_dynamic_velocity(1, ppqToTime(t), m, false, false) - 15 -- Quieter layer
+                insert_melodic_note(t, 1, pitch, vel, math.floor(eighth_ticks * 0.85))
+                t = t + eighth_ticks
+            end
+        end
+
+        -- PHRASE LOGIC: 3x repeat riff, then fill (Zach Hill signature)
+        if phrase_pos <= REPEAT_BARS then
+            -- Repeating riff bars
+            if phrase_pos == 1 or not riff_spec then
+                riff_spec = generate_riff_spec(seq_style)
+            end
+
+            -- Insert focused riff (skip first beat if anchor was placed)
+            local riff_start = measure_start_ppq + PPQ
+            insert_focused_riff(riff_start, measure_end_ppq, riff_spec, 0, m, seq_style)
+
+        else
+            -- Fill bar: chaos!
+            insert_chaos_fill(measure_start_ppq, measure_end_ppq, 0, m, seq_style)
+            riff_spec = nil -- New idea after fill
+        end
+
+        measure_start_ppq = measure_end_ppq
+    end
+
+    -- =============================
+    -- POST-PROCESSING
+    -- =============================
+
+    -- Sort MIDI events
+    reaper.MIDI_Sort(take)
+
+    -- Adaptive parameter evolution (like DWUMMER)
     set_zach('burst_chance', clamp(BURST_CHANCE + 0.02, 0.15, 0.40))
+
+    log('Zach Hill Polyphonic v2.0: Generated ', num_measures, ' measures in ', seq_style, ' style')
+    log('  Rhythm: DWUMMER Zach Hill engine (bursts, doubles, paradiddles, riffs)')
+    log('  Melody: Sequencer-style note selection (repetitive, stepwise)')
 end
 
 -- =============================

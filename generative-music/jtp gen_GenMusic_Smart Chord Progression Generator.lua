@@ -53,6 +53,22 @@ local FUNCTION_SUBDOMINANT = 2
 local FUNCTION_DOMINANT = 3
 
 -- ============================================================================
+-- PERSISTENCE (ExtState)
+-- ============================================================================
+
+local EXT_SECTION = 'jtp_gen_chords_dialog'
+
+local function get_ext(key, def)
+    local v = reaper.GetExtState(EXT_SECTION, key)
+    if v == nil or v == '' then return tostring(def) end
+    return v
+end
+
+local function set_ext(key, val)
+    reaper.SetExtState(EXT_SECTION, key, tostring(val), true)
+end
+
+-- ============================================================================
 -- CHORD PROGRESSION ALGORITHM
 -- ============================================================================
 
@@ -372,6 +388,26 @@ local function getNoteName(midiNote)
     return noteNames[(midiNote % 12) + 1]
 end
 
+-- Build chord name with note and quality
+local function buildChordName(chord)
+    local noteName = getNoteName(chord.root)
+    local quality = ""
+
+    if chord.quality == "minor" then
+        quality = "m"
+    elseif chord.quality == "diminished" then
+        quality = "°"
+    elseif chord.quality == "dominant7" then
+        quality = "7"
+    elseif chord.quality == "minor7" then
+        quality = "m7"
+    elseif chord.quality == "major7" then
+        quality = "maj7"
+    end
+
+    return noteName .. quality
+end
+
 -- Create MIDI item with chord progression
 local function createMIDIItem(track, progression, voicings, startTime, keyName, isMinor)
     -- Get time signature and calculate measure length
@@ -396,7 +432,7 @@ local function createMIDIItem(track, progression, voicings, startTime, keyName, 
     local start_ppq = reaper.MIDI_GetPPQPosFromProjTime(take, startTime)
     local measure_len_ppq = qn_per_measure * PPQ
 
-    -- Add MIDI notes
+    -- Add MIDI notes and take markers
     for i, voicing in ipairs(voicings) do
         local measure_start_ppq = start_ppq + (i - 1) * measure_len_ppq
         local measure_end_ppq = measure_start_ppq + measure_len_ppq
@@ -416,10 +452,20 @@ local function createMIDIItem(track, progression, voicings, startTime, keyName, 
                 true    -- noSortIn
             )
         end
+    end
 
-        -- Add take marker for chord name
-        local chord = progression[i]
-        reaper.SetTakeMarker(take, -1, chord.name, measure_start_ppq, 0)
+    -- Add take markers for all chords after notes are inserted
+    local itemStart = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+    for i, chord in ipairs(progression) do
+        local measure_start_ppq = start_ppq + (i - 1) * measure_len_ppq
+        local chordNoteName = buildChordName(chord)
+        local markerName = chord.name .. ": " .. chordNoteName
+        -- Convert PPQ to project time, then to take-relative seconds
+        local projTime = reaper.MIDI_GetProjTimeFromPPQPos(take, measure_start_ppq)
+        local takePosSeconds = projTime - itemStart
+        if takePosSeconds < 0 then takePosSeconds = 0 end
+        -- Append a new take marker at this position
+        reaper.SetTakeMarker(take, -1, markerName, takePosSeconds, 0)
     end
 
     reaper.MIDI_Sort(take)
@@ -430,71 +476,119 @@ end-- ==========================================================================
 -- USER INTERFACE
 -- ============================================================================
 
-local function getUserInput()
-    -- Build key list
-    local keyList = ""
-    for i, key in ipairs(KEY_NAMES) do
-        keyList = keyList .. key .. " major," .. key .. " minor"
-        if i < #KEY_NAMES then
-            keyList = keyList .. ","
+-- Dialog helpers (match Melody Generator style)
+local NOTE_MENU_NAMES = {"C","C#/Db","D","D#/Eb","E","F","F#/Gb","G","G#/Ab","A","A#/Bb","B"}
+local NOTE_DISPLAY_TO_PC = { ["C"]=0,["C#/Db"]=1,["D"]=2,["D#/Eb"]=3,["E"]=4,["F"]=5,["F#/Gb"]=6,["G"]=7,["G#/Ab"]=8,["A"]=9,["A#/Bb"]=10,["B"]=11 }
+
+local function show_popup_menu(items, default_idx)
+    local menu_str = ""
+    for i, item in ipairs(items) do
+        if i == default_idx then
+            menu_str = menu_str .. "!" .. item .. "|"
+        else
+            menu_str = menu_str .. item .. "|"
         end
     end
-    keyList = "Random," .. keyList
+    gfx.x, gfx.y = reaper.GetMousePosition()
+    return gfx.showmenu(menu_str)
+end
 
+local function getUserInput()
+    -- Defaults from ExtState
+    local def_root_pc = tonumber(get_ext('root_pc', 0)) or 0
+    local def_is_minor = get_ext('is_minor', '0') == '1'
+    local def_length = tonumber(get_ext('length', 8)) or 8
+    local def_adventure = tonumber(get_ext('adventure', 0.5)) or 0.5
+
+    -- Step 0: Mode selection
+    local mode_items = {"Auto (use last settings)", "Random (pick key + quality)", "Manual (configure settings)"}
+    local mode_choice = show_popup_menu(mode_items, 1)
+    if mode_choice == 0 then return nil end
+
+    -- AUTO mode: use last settings
+    if mode_choice == 1 then
+        local keyRoot = def_root_pc
+        local isMinor = def_is_minor
+        local length = math.max(4, math.min(16, def_length))
+        local adventure = math.max(0, math.min(1, def_adventure))
+        local keyName = KEY_NAMES[(keyRoot % 12) + 1]
+
+        return { keyRoot = keyRoot, isMinor = isMinor, keyName = keyName, length = length, adventure = adventure }
+    end
+
+    -- RANDOM mode: pick random key root and quality, then prompt for length/adventure
+    if mode_choice == 2 then
+        -- Seed RNG for better randomness
+        if reaper and reaper.time_precise then math.randomseed(reaper.time_precise()) else math.randomseed(os.time()) end
+        for _=1,3 do math.random() end
+
+        local keyRoot = math.random(0, 11)
+        local isMinor = (math.random() < 0.5)
+
+        local retval, user_input = reaper.GetUserInputs(
+            "jtp gen: Smart Chord Progression Generator",
+            2,
+            "Progression length (4-16),Adventure level (0.0-1.0),extrawidth=200",
+            string.format("%d,%.2f", def_length, def_adventure)
+        )
+        if not retval then return nil end
+
+        local lengthStr, adventureStr = user_input:match("([^,]+),([^,]+)")
+        local length = tonumber(lengthStr) or def_length
+        local adventure = tonumber(adventureStr) or def_adventure
+        length = math.max(4, math.min(16, length))
+        adventure = math.max(0, math.min(1, adventure))
+
+        -- Persist selections for next Auto
+        set_ext('root_pc', keyRoot)
+        set_ext('is_minor', isMinor and '1' or '0')
+        set_ext('length', length)
+        set_ext('adventure', adventure)
+
+        local keyName = KEY_NAMES[(keyRoot % 12) + 1]
+        return { keyRoot = keyRoot, isMinor = isMinor, keyName = keyName, length = length, adventure = adventure }
+    end
+
+    -- MANUAL mode
+    -- Step 1: Root note (pitch class only)
+    local root_default_idx = (def_root_pc % 12) + 1
+    local root_choice = show_popup_menu(NOTE_MENU_NAMES, root_default_idx)
+    if root_choice == 0 then return nil end
+    local root_name = NOTE_MENU_NAMES[root_choice]
+    local keyRoot = NOTE_DISPLAY_TO_PC[root_name] or 0
+
+    -- Step 2: Quality (Major/Minor)
+    local qual_items = {"Major", "Minor"}
+    local qual_default = def_is_minor and 2 or 1
+    local qual_choice = show_popup_menu(qual_items, qual_default)
+    if qual_choice == 0 then return nil end
+    local isMinor = (qual_choice == 2)
+
+    -- Step 3: Other params (length, adventure)
     local retval, user_input = reaper.GetUserInputs(
         "jtp gen: Smart Chord Progression Generator",
-        4,
-        "Key (or Random),Progression length (4-16),Adventure level (0.0-1.0),extrawidth=200",
-        "Random,8,0.5"
+        2,
+        "Progression length (4-16),Adventure level (0.0-1.0),extrawidth=200",
+        string.format("%d,%.2f", def_length, def_adventure)
     )
+    if not retval then return nil end
 
-    if not retval then
-        return nil
-    end
-
-    -- Parse input
-    local keyInput, lengthStr, adventureStr = user_input:match("([^,]+),([^,]+),([^,]+)")
-
-    local length = tonumber(lengthStr) or 8
+    local lengthStr, adventureStr = user_input:match("([^,]+),([^,]+)")
+    local length = tonumber(lengthStr) or def_length
+    local adventure = tonumber(adventureStr) or def_adventure
     length = math.max(4, math.min(16, length))
-
-    local adventure = tonumber(adventureStr) or 0.5
     adventure = math.max(0, math.min(1, adventure))
 
-    -- Parse key
-    local keyRoot, isMinor, keyName
+    -- Persist selections
+    set_ext('root_pc', keyRoot)
+    set_ext('is_minor', isMinor and '1' or '0')
+    set_ext('length', length)
+    set_ext('adventure', adventure)
 
-    if keyInput:lower():match("random") then
-        keyRoot = math.random(0, 11)
-        isMinor = math.random() > 0.5
-        keyName = KEY_NAMES[keyRoot + 1]
-    else
-        -- Parse key input
-        local keyNote = keyInput:match("^([A-Ga-g][#b]?)")
-        local mode = keyInput:lower():match("minor") and true or false
+    -- Choose display key name (prefer KEY_NAMES mapping)
+    local keyName = KEY_NAMES[(keyRoot % 12) + 1]
 
-        if not keyNote then
-            reaper.ShowMessageBox("Invalid key format. Use format like 'C major' or 'A minor'", "Error", 0)
-            return nil
-        end
-
-        keyRoot = NOTE_NAMES[keyNote:upper()]
-        if not keyRoot then
-            reaper.ShowMessageBox("Unknown key: " .. keyNote, "Error", 0)
-            return nil
-        end
-
-        isMinor = mode
-        keyName = keyNote:upper()
-    end
-
-    return {
-        keyRoot = keyRoot,
-        isMinor = isMinor,
-        keyName = keyName,
-        length = length,
-        adventure = adventure
-    }
+    return { keyRoot = keyRoot, isMinor = isMinor, keyName = keyName, length = length, adventure = adventure }
 end
 
 -- ============================================================================
@@ -543,16 +637,7 @@ function main()
     local cursorPos = reaper.GetCursorPosition()
     createMIDIItem(track, progression, voicings, cursorPos, params.keyName, params.isMinor)
 
-    -- Show result
-    local modeName = params.isMinor and " minor" or " major"
-    local chordNames = {}
-    for _, chord in ipairs(progression) do
-        table.insert(chordNames, chord.name)
-    end
-    local progressionStr = table.concat(chordNames, " - ")
-
-    reaper.ShowConsoleMsg("Generated progression in " .. params.keyName .. modeName .. ":\n")
-    reaper.ShowConsoleMsg(progressionStr .. "\n")
+    -- Result: console output disabled as requested
 
     reaper.UpdateArrange()
     reaper.Undo_EndBlock("jtp gen: Generate Smart Chord Progression", -1)

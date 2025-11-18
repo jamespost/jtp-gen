@@ -4919,9 +4919,14 @@ else
             base_pattern[13] = {active = true, offset = 0}
         end
 
-        -- Generate pitched sequences
+        -- Generate pitched sequences (multi-voice aware)
         local current_time = start_time
-        local current_idx = math.random(1, math.min(range_limit, #scale_notes))
+        -- Track a separate scale index per voice so multiple voices can move independently
+        local voice_scale_idx = {}
+        local num_seq_voices = clamp(num_voices, 1, 16)
+        for v = 0, num_seq_voices - 1 do
+            voice_scale_idx[v] = math.random(1, math.min(range_limit, #scale_notes))
+        end
 
         for pattern_num = 1, num_patterns do
             -- Decide variation level for this pattern
@@ -4950,48 +4955,54 @@ else
                 local step_time = current_time + (step - 1) * sixteenth
 
                 if base_pattern[step].active and math.random() > rest_chance then
-                    -- Melodic movement: small steps for repetitive feel
-                    local move
-                    if seq_style == 'bass' then
-                        -- Bass: root-fifth motion, occasional passing tones
-                        move = choose_random({0, 0, 0, 4, 4, 1, -1}) -- Bias to root/fifth
-                    elseif seq_style == 'lead' then
-                        -- Lead: stepwise with occasional leaps
-                        if math.random() < 0.7 then
-                            move = choose_random({-1, 0, 1}) -- Stepwise
-                        else
-                            move = choose_random({-3, -2, 2, 3}) -- Small leaps
+                    -- Iterate voices so sequencer can be polyphonic when num_voices > 1
+                    for voice = 0, num_seq_voices - 1 do
+                        -- Small chance each voice skips this active step to avoid total clutter
+                        if voice == 0 or math.random() > 0.35 then
+                            local move
+                            if seq_style == 'bass' then
+                                -- Bass: root-fifth motion, occasional passing tones
+                                move = choose_random({0, 0, 0, 4, 4, 1, -1}) -- Bias to root/fifth
+                            elseif seq_style == 'lead' then
+                                -- Lead: stepwise with occasional leaps
+                                if math.random() < 0.7 then
+                                    move = choose_random({-1, 0, 1}) -- Stepwise
+                                else
+                                    move = choose_random({-3, -2, 2, 3}) -- Small leaps
+                                end
+                            else -- arp
+                                -- Arpeggio: systematic triadic motion
+                                move = choose_random({-4, -2, 0, 2, 4}) -- Triadic intervals
+                            end
+
+                            local idx = clamp((voice_scale_idx[voice] or 1) + move + pitch_shift, 1, math.min(range_limit, #scale_notes))
+                            voice_scale_idx[voice] = idx
+                            local pitch = scale_notes[idx]
+
+                            -- Duration: mostly 16ths, occasional 8th notes
+                            local dur
+                            if seq_style == 'bass' and math.random() < 0.3 then
+                                dur = sixteenth * 0.5 -- Short stabs
+                            elseif math.random() < 0.15 then
+                                dur = sixteenth * 2 -- Occasional longer note
+                            else
+                                dur = sixteenth * 0.9 -- Standard 16th (slight gap)
+                            end
+
+                            -- Velocity variation
+                            local vel = vel_base + math.random(-math.floor(vel_range/2), math.floor(vel_range/2))
+                            -- Accent certain steps (1, 5, 9, 13 = downbeats)
+                            if step % 4 == 1 and voice == 0 then vel = vel + 10 end
+                            vel = clamp(math.floor(vel), 40, 120)
+
+                            reaper.MIDI_InsertNote(
+                                take, false, false,
+                                timeToPPQ(step_time),
+                                timeToPPQ(step_time + dur),
+                                voice, pitch, vel, false
+                            )
                         end
-                    else -- arp
-                        -- Arpeggio: systematic triadic motion
-                        move = choose_random({-4, -2, 0, 2, 4}) -- Triadic intervals
                     end
-
-                    current_idx = clamp(current_idx + move + pitch_shift, 1, math.min(range_limit, #scale_notes))
-                    local pitch = scale_notes[current_idx]
-
-                    -- Duration: mostly 16ths, occasional 8th notes
-                    local dur
-                    if seq_style == 'bass' and math.random() < 0.3 then
-                        dur = sixteenth * 0.5 -- Short stabs
-                    elseif math.random() < 0.15 then
-                        dur = sixteenth * 2 -- Occasional longer note
-                    else
-                        dur = sixteenth * 0.9 -- Standard 16th (slight gap)
-                    end
-
-                    -- Velocity variation
-                    local vel = vel_base + math.random(-math.floor(vel_range/2), math.floor(vel_range/2))
-                    -- Accent certain steps (1, 5, 9, 13 = downbeats)
-                    if step % 4 == 1 then vel = vel + 10 end
-                    vel = clamp(math.floor(vel), 40, 120)
-
-                    reaper.MIDI_InsertNote(
-                        take, false, false,
-                        timeToPPQ(step_time),
-                        timeToPPQ(step_time + dur),
-                        0, pitch, vel, false
-                    )
                 end
             end
 

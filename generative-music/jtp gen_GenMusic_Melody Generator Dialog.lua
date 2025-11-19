@@ -4979,14 +4979,17 @@ else
                             voice_scale_idx[voice] = idx
                             local pitch = scale_notes[idx]
 
-                            -- Duration: mostly 16ths, occasional 8th notes
+                            -- Duration: equal chance of 1/16, 1/8, 1/4, 1/2 notes
+                            local r = math.random()
                             local dur
-                            if seq_style == 'bass' and math.random() < 0.3 then
-                                dur = sixteenth * 0.5 -- Short stabs
-                            elseif math.random() < 0.15 then
-                                dur = sixteenth * 2 -- Occasional longer note
+                            if r < 0.25 then
+                                dur = sixteenth * 0.9      -- 1/16
+                            elseif r < 0.50 then
+                                dur = eighth_note * 0.9    -- 1/8
+                            elseif r < 0.75 then
+                                dur = quarter_note * 0.9   -- 1/4
                             else
-                                dur = sixteenth * 0.9 -- Standard 16th (slight gap)
+                                dur = half_note * 0.9      -- 1/2
                             end
 
                             -- Velocity variation

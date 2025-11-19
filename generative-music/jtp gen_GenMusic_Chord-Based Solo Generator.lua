@@ -70,22 +70,37 @@ local config = {
     humanization_velocity = 12,   -- ±12 velocity variation
     swing_amount = 0.15,          -- Swing/jazz feel (0-0.5)
     note_density = 0.7,           -- How many notes to generate (0-1)
-    phrase_length_min = 3,        -- Min notes per phrase
-    phrase_length_max = 8,        -- Max notes per phrase
-    rest_probability = 0.25,      -- Chance of rest between phrases
+    phrase_measures = 2,          -- Phrases align to measure boundaries
+    rest_probability = 0.2,       -- Chance of rest between phrases
     octave_range = {-1, 2},       -- Octave transposition range
+    beats_per_bar = 4,            -- Time signature (for now, 4/4)
 }
 
--- Jazz phrasing rhythms (in quarter notes)
-local JAZZ_RHYTHMS = {
-    {0.25, 50},    -- 16th note (weight: 50)
-    {0.33, 60},    -- Triplet 8th
-    {0.5, 100},    -- 8th note (most common)
-    {0.67, 40},    -- Dotted 8th
-    {0.75, 30},    -- Dotted 8th + 16th
-    {1.0, 80},     -- Quarter note
-    {1.5, 20},     -- Dotted quarter
-    {2.0, 10}      -- Half note (occasional)
+-- Rhythmic motifs (patterns that total to bar-relative durations)
+-- Each motif is a sequence of durations that creates a coherent rhythm
+local RHYTHMIC_MOTIFS = {
+    -- 1-beat patterns
+    { pattern = {0.5, 0.5}, weight = 100, name = "two_eighths" },
+    { pattern = {0.25, 0.25, 0.5}, weight = 80, name = "sixteenth_pair_eighth" },
+    { pattern = {0.5, 0.25, 0.25}, weight = 80, name = "eighth_sixteenth_pair" },
+    { pattern = {0.25, 0.25, 0.25, 0.25}, weight = 60, name = "four_sixteenths" },
+    { pattern = {1.0}, weight = 70, name = "quarter" },
+    { pattern = {0.33, 0.33, 0.33}, weight = 50, name = "triplet_eighths" },
+
+    -- 2-beat patterns
+    { pattern = {0.5, 0.5, 0.5, 0.5}, weight = 100, name = "four_eighths" },
+    { pattern = {1.0, 0.5, 0.5}, weight = 90, name = "quarter_two_eighths" },
+    { pattern = {0.5, 0.5, 1.0}, weight = 90, name = "two_eighths_quarter" },
+    { pattern = {0.75, 0.25, 0.5, 0.5}, weight = 70, name = "dotted_eighth_run" },
+    { pattern = {2.0}, weight = 40, name = "half_note" },
+    { pattern = {1.0, 1.0}, weight = 60, name = "two_quarters" },
+    { pattern = {0.5, 1.0, 0.5}, weight = 75, name = "eighth_quarter_eighth" },
+
+    -- 4-beat patterns (full bar)
+    { pattern = {1.0, 1.0, 1.0, 1.0}, weight = 50, name = "four_quarters" },
+    { pattern = {2.0, 1.0, 1.0}, weight = 40, name = "half_two_quarters" },
+    { pattern = {1.0, 1.0, 2.0}, weight = 40, name = "two_quarters_half" },
+    { pattern = {4.0}, weight = 20, name = "whole_note" },
 }
 
 -- =============================
@@ -115,13 +130,53 @@ local function choose_weighted(options)
     return options[1][1]
 end
 
-local function apply_swing(base_time, beat_position, swing_amt)
-    -- Apply swing to off-beats
-    local beat_fraction = beat_position % 1.0
+local function choose_rhythmic_motif(available_duration)
+    -- Filter motifs that fit within available duration
+    local suitable_motifs = {}
 
-    -- If this is an off-beat 8th note (0.5 beat position)
-    if math.abs(beat_fraction - 0.5) < 0.1 then
-        return base_time + (swing_amt * 0.25)  -- Push it later
+    for _, motif in ipairs(RHYTHMIC_MOTIFS) do
+        local total_duration = 0
+        for _, dur in ipairs(motif.pattern) do
+            total_duration = total_duration + dur
+        end
+
+        if total_duration <= available_duration + 0.01 then  -- Small tolerance
+            table.insert(suitable_motifs, {motif, motif.weight})
+        end
+    end
+
+    if #suitable_motifs == 0 then
+        -- Fallback: single note filling the space
+        return {{math.min(available_duration, 1.0)}}
+    end
+
+    local chosen = choose_weighted(suitable_motifs)
+    return chosen.pattern
+end
+
+local function get_beat_position(time_qn)
+    -- Returns position within current beat (0.0 to 1.0)
+    return time_qn % 1.0
+end
+
+local function get_bar_position(time_qn, beats_per_bar)
+    -- Returns position within current bar (0.0 to beats_per_bar)
+    return time_qn % beats_per_bar
+end
+
+local function round_to_beat_grid(time_qn, subdivision)
+    -- Round to nearest subdivision (e.g., 0.5 for 8th notes, 0.25 for 16ths)
+    return math.floor(time_qn / subdivision + 0.5) * subdivision
+end
+
+local function apply_swing(base_time, swing_amt)
+    -- Apply swing to off-beat 8th notes
+    local beat_pos = get_beat_position(base_time)
+
+    -- If this is an off-beat 8th note (around 0.5 in the beat)
+    -- Push it later to create swing feel
+    if beat_pos > 0.4 and beat_pos < 0.6 then
+        return base_time + (swing_amt * 0.25)
     end
 
     return base_time
@@ -314,7 +369,7 @@ end
 -- Solo Generation Engine
 -- =============================
 
--- Generate a melodic phrase within a chord segment
+-- Generate a melodic phrase with coherent rhythm aligned to measures
 local function generatePhrase(chord_segment, mode, start_time, max_duration)
     local note_pool
 
@@ -330,92 +385,162 @@ local function generatePhrase(chord_segment, mode, start_time, max_duration)
     if #note_pool == 0 then return {} end
 
     local phrase = {}
-    local phrase_length = math.random(config.phrase_length_min, config.phrase_length_max)
     local current_time = start_time
     local last_pitch = nil
+
+    -- Round start time to nearest 16th note for rhythmic clarity
+    current_time = round_to_beat_grid(current_time, 0.25)
+
+    -- Calculate phrase duration aligned to measures
+    local phrase_duration = config.phrase_measures * config.beats_per_bar
+    phrase_duration = math.min(phrase_duration, max_duration)
 
     -- Start phrase on a chord tone
     local start_pitch = chord_segment.pitches[math.random(1, #chord_segment.pitches)]
     start_pitch = start_pitch + (math.random(config.octave_range[1], config.octave_range[2]) * 12)
     start_pitch = clamp(start_pitch, 36, 96)
+    last_pitch = start_pitch
 
-    for i = 1, phrase_length do
-        if current_time >= start_time + max_duration then
-            break
-        end
+    -- Build phrase using rhythmic motifs
+    local phrase_end_time = current_time + phrase_duration
+    local note_index = 0
 
-        -- Pick rhythm
-        local duration = choose_weighted(JAZZ_RHYTHMS)
+    while current_time < phrase_end_time - 0.1 do
+        note_index = note_index + 1
 
-        -- Don't exceed segment boundary
-        if current_time + duration > start_time + max_duration then
-            duration = (start_time + max_duration) - current_time
-        end
+        -- Calculate remaining time in phrase
+        local remaining = phrase_end_time - current_time
 
-        -- Pick pitch based on mode and melodic logic
-        local pitch
+        -- Choose a rhythmic motif that fits
+        local motif = choose_rhythmic_motif(remaining)
 
-        if i == 1 then
-            pitch = start_pitch
-        elseif mode == GENERATION_MODES.INTERPOLATED and last_pitch then
-            -- Stepwise motion preferred
-            local step = math.random(-3, 3)
-            pitch = last_pitch + step
+        -- Generate notes for each duration in the motif
+        for i, note_duration in ipairs(motif) do
+            if current_time >= phrase_end_time then break end
 
-            -- Clamp to pool range
-            pitch = clamp(pitch, note_pool[1], note_pool[#note_pool])
+            -- Clamp duration to remaining time
+            ---@type number
+            local duration = math.min(tonumber(note_duration) or 0.5, phrase_end_time - current_time)
+            if duration < 0.1 then break end
 
-            -- Find closest note in pool
-            local closest = note_pool[1]
-            local closest_dist = math.abs(pitch - closest)
-            for _, p in ipairs(note_pool) do
-                local dist = math.abs(pitch - p)
-                if dist < closest_dist then
-                    closest = p
-                    closest_dist = dist
+            -- Pick pitch based on mode and melodic logic
+            local pitch
+
+            if note_index == 1 then
+                pitch = start_pitch
+            elseif mode == GENERATION_MODES.INTERPOLATED and last_pitch then
+                -- Stepwise motion preferred (scalar movement)
+                local direction = (math.random() < 0.5) and -1 or 1
+                local step_size = math.random(1, 3)
+
+                -- Occasional leaps on strong beats
+                local bar_pos = get_bar_position(current_time, config.beats_per_bar)
+                if bar_pos < 0.1 or math.abs(bar_pos - 2.0) < 0.1 then
+                    if math.random() < 0.3 then
+                        step_size = math.random(3, 5)  -- Leap
+                    end
+                end
+
+                pitch = last_pitch + (direction * step_size)
+                pitch = clamp(pitch, note_pool[1], note_pool[#note_pool])
+
+                -- Find closest note in pool
+                local closest = note_pool[1]
+                local closest_dist = math.abs(pitch - closest)
+                for _, p in ipairs(note_pool) do
+                    local dist = math.abs(pitch - p)
+                    if dist < closest_dist then
+                        closest = p
+                        closest_dist = dist
+                    end
+                end
+                pitch = closest
+
+            elseif mode == GENERATION_MODES.EXTENDED and last_pitch then
+                -- Prefer chord tones on strong beats
+                local bar_pos = get_bar_position(current_time, config.beats_per_bar)
+                local is_strong_beat = (bar_pos < 0.1) or (math.abs(bar_pos - 2.0) < 0.1)
+
+                if is_strong_beat or math.random() < 0.6 then
+                    -- Chord tone
+                    pitch = chord_segment.pitches[math.random(1, #chord_segment.pitches)]
+                    pitch = pitch + (math.random(config.octave_range[1], config.octave_range[2]) * 12)
+                    pitch = clamp(pitch, 36, 96)
+                else
+                    -- Approach note or stepwise motion
+                    local step = (math.random() < 0.5) and -1 or 1
+                    pitch = last_pitch + step
+                    pitch = clamp(pitch, note_pool[1], note_pool[#note_pool])
+                end
+            else
+                -- Safe mode: chord tones only, with some contour
+                if last_pitch then
+                    -- Try to create melodic contour
+                    local available_chord_tones = {}
+                    for _, cp in ipairs(chord_segment.pitches) do
+                        for oct = config.octave_range[1], config.octave_range[2] do
+                            local p = cp + (oct * 12)
+                            if p >= 36 and p <= 96 then
+                                table.insert(available_chord_tones, p)
+                            end
+                        end
+                    end
+
+                    -- Pick a chord tone near the last pitch
+                    table.sort(available_chord_tones)
+                    local closest = available_chord_tones[1]
+                    local closest_dist = math.abs(last_pitch - closest)
+
+                    for _, p in ipairs(available_chord_tones) do
+                        local dist = math.abs(last_pitch - p)
+                        if dist < closest_dist and dist > 0 then
+                            closest = p
+                            closest_dist = dist
+                        end
+                    end
+
+                    pitch = closest
+                else
+                    pitch = note_pool[math.random(1, #note_pool)]
                 end
             end
-            pitch = closest
-        elseif mode == GENERATION_MODES.EXTENDED and last_pitch then
-            -- Prefer chord tones, occasional approaches
-            if math.random() < 0.7 then
-                -- Chord tone
-                pitch = chord_segment.pitches[math.random(1, #chord_segment.pitches)]
-                pitch = pitch + (math.random(config.octave_range[1], config.octave_range[2]) * 12)
-                pitch = clamp(pitch, 36, 96)
-            else
-                -- Approach note leading to next
-                pitch = note_pool[math.random(1, #note_pool)]
+
+            -- Dynamic velocity based on phrase position and beat strength
+            local bar_pos = get_bar_position(current_time, config.beats_per_bar)
+            local velocity = 75
+
+            -- Accent downbeats
+            if bar_pos < 0.1 then
+                velocity = velocity + 20
+            elseif math.abs(bar_pos - 2.0) < 0.1 then
+                velocity = velocity + 10  -- Beat 3 (weaker accent)
             end
-        else
-            -- Safe mode or no context: random from pool
-            pitch = note_pool[math.random(1, #note_pool)]
+
+            -- Accent longer notes
+            if duration >= 1.0 then
+                velocity = velocity + 10
+            end
+
+            -- Add variation
+            velocity = velocity + math.random(-10, 10)
+
+            -- Apply swing and humanization
+            local actual_time = apply_swing(current_time, config.swing_amount)
+            actual_time, velocity = humanize(actual_time, velocity)
+
+            table.insert(phrase, {
+                start_qn = actual_time,
+                end_qn = actual_time + (duration * 0.90),  -- Slight separation
+                pitch = pitch,
+                velocity = clamp(velocity, 1, 127),
+            })
+
+            current_time = current_time + duration
+            last_pitch = pitch
         end
-
-        -- Base velocity with dynamics
-        local velocity = 70 + math.random(-15, 25)
-
-        -- Accent longer notes
-        if duration >= 1.0 then
-            velocity = velocity + 15
-        end
-
-        -- Apply swing and humanization
-        local beat_position = (current_time - start_time) / 1.0  -- Relative to phrase start
-        local actual_time = apply_swing(current_time, beat_position, config.swing_amount)
-        actual_time, velocity = humanize(actual_time, velocity)
-
-        table.insert(phrase, {
-            start_qn = actual_time,
-            end_qn = actual_time + (duration * 0.85),  -- Slight separation
-            pitch = pitch,
-            velocity = velocity,
-        })
-
-        current_time = current_time + duration
-        last_pitch = pitch
     end
 
+    log('Generated phrase with ', #phrase, ' notes, duration: ', phrase_duration, ' beats')
     return phrase
 end
 
@@ -423,30 +548,50 @@ end
 local function generateSolo(chord_timeline, mode)
     local solo_notes = {}
 
-    for _, chord_segment in ipairs(chord_timeline) do
-        local segment_duration = chord_segment.duration
+    for seg_idx, chord_segment in ipairs(chord_timeline) do
         local current_time = chord_segment.start_qn
 
+        -- Align start to nearest beat for rhythmic coherence
+        local beat_aligned_start = round_to_beat_grid(current_time, 1.0)
+        if beat_aligned_start < chord_segment.start_qn then
+            beat_aligned_start = beat_aligned_start + 1.0
+        end
+        current_time = beat_aligned_start
+
+        log('Processing chord segment ', seg_idx, ' from ', current_time, ' to ', chord_segment.end_qn)
+
         -- Generate phrases until segment is filled
-        while current_time < chord_segment.end_qn do
-            -- Occasionally insert rests
+        while current_time < chord_segment.end_qn - 0.5 do
+            -- Occasionally insert measured rests (aligned to beats)
             if math.random() < config.rest_probability then
-                local rest_duration = choose_weighted({{0.5, 70}, {1.0, 30}})
+                local rest_measures = math.random(1, 2)
+                local rest_duration = rest_measures * config.beats_per_bar
                 current_time = current_time + rest_duration
+                log('Inserted ', rest_measures, '-measure rest')
             else
-                -- Generate phrase
+                -- Calculate available time in this chord segment
                 local remaining_time = chord_segment.end_qn - current_time
-                local phrase_max_duration = math.min(remaining_time, 4.0)  -- Max 4 beats per phrase
 
-                local phrase = generatePhrase(chord_segment, mode, current_time, phrase_max_duration)
+                -- Phrase duration: align to measures, limited by segment boundary
+                local phrase_measures = config.phrase_measures
+                local phrase_duration = phrase_measures * config.beats_per_bar
+                phrase_duration = math.min(phrase_duration, remaining_time)
 
-                if #phrase > 0 then
-                    for _, note in ipairs(phrase) do
-                        table.insert(solo_notes, note)
+                -- Only generate if we have enough space for at least 1 beat
+                if phrase_duration >= 1.0 then
+                    local phrase = generatePhrase(chord_segment, mode, current_time, phrase_duration)
+
+                    if #phrase > 0 then
+                        for _, note in ipairs(phrase) do
+                            table.insert(solo_notes, note)
+                        end
+
+                        -- Advance time to end of phrase (rounded to beat)
+                        current_time = phrase[#phrase].end_qn
+                        current_time = round_to_beat_grid(current_time, 1.0)
+                    else
+                        break
                     end
-
-                    -- Advance time to end of phrase
-                    current_time = phrase[#phrase].end_qn
                 else
                     break
                 end
